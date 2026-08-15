@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+@layer utilities {
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
+    to {
+      opacity: 1;
+      /* IMPORTANT: must be `none`, not `translateY(0)`. Any non-`none` transform
+         value (even a zero one) creates a new CSS containing block for
+         descendant `position: fixed` elements. Since this class sits on the
+         dashboard wrapper div, leaving a transform here was trapping nested
+         modals (e.g. "Approve Account Access") inside the wrapper's box
+         instead of covering the full viewport, causing them to visually
+         overlap with dashboard cards behind them. */
+      transform: none;
+    }
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      /* Same fix as above — avoid leaving a residual transform after the
+         animation completes (animation-fill-mode: forwards keeps this final
+         state applied indefinitely). */
+      transform: none;
+    }
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.25s ease-out forwards;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+
+  /* Custom scrollbars */
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: #CBD5E1;
+    border-radius: 9999px;
+  }
+}
+

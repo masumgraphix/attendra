@@ -1,0 +1,236 @@
+{
+  "userAccounts": [
+    {
+      "id": "USR-001",
+      "email": "jhumatahmina@gmail.com",
+      "name": "Jhuma Tahmina",
+      "role": "super_admin",
+      "employeeId": "DG-1008",
+      "status": "active",
+      "avatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200",
+      "createdAt": "2026-01-01",
+      "passwordHash": "$2b$10$VEwpqrDr/8Fv46Upuzx8GupY1ymioUCx0D/9Ymbu7d3JYJYpTgjGi"
+    },
+    {
+      "id": "USR-002",
+      "email": "kamrul89ster@gmail.com",
+      "name": "Kamrul Ster",
+      "role": "admin",
+      "employeeId": "DG-1001",
+      "status": "active",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
+      "createdAt": "2026-01-01",
+      "passwordHash": "$2b$10$xzFUozEyB5y6H5Kd3.IPVO3aPi.GXvQ7kjNOca/jeI0egpUWwWMbW"
+    }
+  ],
+  "employees": [
+    {
+      "id": "DG-1001",
+      "name": "Kamrul Ster",
+      "role": "HR Manager",
+      "department": "Human Resources",
+      "managerId": "DG-1008",
+      "email": "kamrul89ster@gmail.com",
+      "phone": "+880 1711-000111",
+      "status": "active",
+      "joinDate": "2023-01-15",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
+      "salary": 85000,
+      "leaveBalances": {
+        "casual": 8,
+        "sick": 10,
+        "annual": 14
+      },
+      "monthlyLateCount": 1,
+      "salaryDeductionDays": 0
+    },
+    {
+      "id": "DG-1008",
+      "name": "Jhuma Tahmina",
+      "role": "Chief Executive Officer",
+      "department": "Executive",
+      "managerId": null,
+      "email": "jhumatahmina@gmail.com",
+      "phone": "+880 1711-000888",
+      "status": "active",
+      "joinDate": "2021-01-01",
+      "avatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200",
+      "salary": 250000,
+      "leaveBalances": {
+        "casual": 10,
+        "sick": 14,
+        "annual": 20
+      },
+      "monthlyLateCount": 0,
+      "salaryDeductionDays": 0
+    },
+    {
+      "id": "DG6436",
+      "name": "Test Employee 1",
+      "role": "Software Engineer",
+      "department": "Engineering",
+      "managerId": null,
+      "managerName": "Executive Desk",
+      "email": "anonto412@gmail.com",
+      "phone": "+1 (555) 019-2831",
+      "status": "active",
+      "joinDate": "2026-08-04",
+      "avatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
+      "salary": "50000.00",
+      "leaveBalances": {
+        "sick": 10,
+        "annual": 15,
+        "casual": 5,
+        "unpaid": 10,
+        "half_day": 5,
+        "emergency": 3,
+        "maternity": 90,
+        "paternity": 10
+      },
+      "monthlyLateCount": 0,
+      "salaryDeductionDays": 0,
+      "dob": "1996-08-09",
+      "nidNumber": "5949598248",
+      "address": null,
+      "bloodGroup": null,
+      "designation": "Software Engineer",
+      "location": "Headquarters Office",
+      "shift": "Morning Regular (09:00 AM - 06:00 PM)",
+      "employmentType": "full_time",
+      "manager": "Executive Desk",
+      "leaveBalance": {
+        "sick": 10,
+        "annual": 15,
+        "casual": 5,
+        "unpaid": 10,
+        "half_day": 5,
+        "emergency": 3,
+        "maternity": 90,
+        "paternity": 10
+      },
+      "leaveUsed": {}
+    }
+  ],
+  "attendance": [],
+  "leaveRequests": [
+    {
+      "id": "LV-101",
+      "employeeId": "DG-1002",
+      "type": "casual",
+      "startDate": "2026-08-10",
+      "endDate": "2026-08-11",
+      "days": 2,
+      "reason": "Family event in hometown",
+      "status": "pending",
+      "appliedOn": "2026-08-01"
+    }
+  ],
+  "leavePolicies": [
+    {
+      "id": "LP-01",
+      "name": "Casual Leave",
+      "code": "CL",
+      "totalDays": 10,
+      "carryForward": false
+    },
+    {
+      "id": "LP-02",
+      "name": "Sick Leave",
+      "code": "SL",
+      "totalDays": 14,
+      "carryForward": false
+    },
+    {
+      "id": "LP-03",
+      "name": "Annual Leave",
+      "code": "AL",
+      "totalDays": 15,
+      "carryForward": true,
+      "maxCarryForwardDays": 5
+    }
+  ],
+  "announcements": [
+    {
+      "id": "ANN-01",
+      "title": "Updated Office Attendance Policy",
+      "content": "Grace period is strictly 20 minutes from work shift start (09:00 AM). 3 late check-ins result in 1 day salary deduction.",
+      "priority": "high",
+      "targetDepartment": "all",
+      "date": "2026-08-01",
+      "author": "Jhuma Tahmina"
+    }
+  ],
+  "holidays": [
+    {
+      "id": "HOL-01",
+      "title": "National Independence Day",
+      "date": "2026-03-26",
+      "type": "national"
+    },
+    {
+      "id": "HOL-02",
+      "title": "Eid-ul-Fitr Holiday",
+      "date": "2026-03-20",
+      "type": "religious"
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "LOG-01",
+      "timestamp": "2026-08-04T05:59:47.289Z",
+      "user": "System",
+      "action": "Database Seed",
+      "details": "Initialized Attendra server database"
+    }
+  ],
+  "notifications": [
+    {
+      "id": "NOTIF-01",
+      "title": "Welcome to Attendra",
+      "message": "System database successfully mounted and active.",
+      "timestamp": "2026-08-04T05:59:47.289Z",
+      "read": false,
+      "type": "system"
+    }
+  ],
+  "departments": [
+    {
+      "id": "DEP-101",
+      "name": "Executive",
+      "description": "C-Suite Executive Leadership & Board Management",
+      "headName": "Jhuma Tahmina",
+      "headAvatar": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200",
+      "color": "#7C3AED"
+    },
+    {
+      "id": "DEP-102",
+      "name": "Human Resources",
+      "description": "People Operations, Recruitment & Employee Welfare",
+      "headName": "Kamrul Ster",
+      "headAvatar": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200",
+      "color": "#2563EB"
+    },
+    {
+      "id": "DEP-103",
+      "name": "Engineering",
+      "description": "Software Engineering, Infrastructure & Cloud Ops",
+      "headName": "Md Masum Bellal",
+      "headAvatar": "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200",
+      "color": "#059669"
+    },
+    {
+      "id": "DEP-104",
+      "name": "Design",
+      "description": "Product UI/UX Design, Branding & Graphic Assets",
+      "headName": "Nabil",
+      "headAvatar": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200",
+      "color": "#DB2777"
+    }
+  ],
+  "registrationRequests": [],
+  "passwordResetTokens": [],
+  "latePenaltyRule": {
+    "threshold": 3,
+    "deductionDays": 1
+  }
+}
