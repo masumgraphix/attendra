@@ -20,6 +20,47 @@ const PRESET_AVATARS = [
   'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400&auto=format&fit=crop&q=80',
 ];
 
+// Uploaded photos are resized to a small square and re-encoded as
+// compressed JPEG before being stored anywhere. Raw phone photos can be
+// several MB as Base64, which blows past localStorage's ~5-10MB quota
+// (shared with attendance/employee data) and silently fails to save. A
+// 300x300 JPEG at 70% quality is typically only 20-50KB.
+const MAX_AVATAR_DIMENSION = 300;
+const AVATAR_JPEG_QUALITY = 0.7;
+
+function compressImageFile(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read file.'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Could not load image.'));
+      img.onload = () => {
+        const size = Math.min(img.width, img.height);
+        const sx = (img.width - size) / 2;
+        const sy = (img.height - size) / 2;
+
+        const targetSize = Math.min(MAX_AVATAR_DIMENSION, size);
+        const canvas = document.createElement('canvas');
+        canvas.width = targetSize;
+        canvas.height = targetSize;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas not supported.'));
+          return;
+        }
+        // Draw the center-cropped square, scaled down to targetSize.
+        ctx.drawImage(img, sx, sy, size, size, 0, 0, targetSize, targetSize);
+
+        resolve(canvas.toDataURL('image/jpeg', AVATAR_JPEG_QUALITY));
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
   isOpen,
   onClose,
@@ -29,24 +70,34 @@ export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
   const [selectedUrl, setSelectedUrl] = useState(employee.avatar);
   const [customUrl, setCustomUrl] = useState('');
   const [activeTab, setActiveTab] = useState<'upload' | 'url' | 'presets'>('upload');
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        alert('File size exceeds 5MB limit. Please select a smaller photo.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (reader.result) {
-          setSelectedUrl(reader.result as string);
-        }
-      };
-      reader.readAsDataURL(file);
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert('File size exceeds 5MB limit. Please select a smaller photo.');
+      return;
+    }
+
+    setUploadError(null);
+    setIsProcessingUpload(true);
+    try {
+      // Resize + compress before it ever touches state/localStorage.
+      const compressedDataUrl = await compressImageFile(file);
+      setSelectedUrl(compressedDataUrl);
+    } catch (err) {
+      console.error('Failed to process uploaded image:', err);
+      setUploadError('Could not process this image. Please try a different photo.');
+    } finally {
+      setIsProcessingUpload(false);
+      // Allow re-selecting the same file again if needed.
+      if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
@@ -152,15 +203,22 @@ export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
               className="hidden"
             />
             <div
-              onClick={() => fileInputRef.current?.click()}
-              className="border-2 border-dashed border-slate-300 hover:border-blue-500 bg-slate-50 hover:bg-blue-50/40 rounded-2xl p-6 text-center cursor-pointer transition-all space-y-2 group"
+              onClick={() => !isProcessingUpload && fileInputRef.current?.click()}
+              className={`border-2 border-dashed border-slate-300 hover:border-blue-500 bg-slate-50 hover:bg-blue-50/40 rounded-2xl p-6 text-center cursor-pointer transition-all space-y-2 group ${
+                isProcessingUpload ? 'opacity-60 pointer-events-none' : ''
+              }`}
             >
               <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mx-auto group-hover:scale-110 transition-transform">
                 <Upload className="w-5 h-5" />
               </div>
-              <p className="text-xs font-extrabold text-slate-800">Click to upload image from device</p>
+              <p className="text-xs font-extrabold text-slate-800">
+                {isProcessingUpload ? 'Processing image...' : 'Click to upload image from device'}
+              </p>
               <p className="text-[10px] text-slate-400">Supports JPG, PNG, WEBP (Max 5MB)</p>
             </div>
+            {uploadError && (
+              <p className="text-[11px] font-semibold text-rose-600 text-center">{uploadError}</p>
+            )}
           </div>
         )}
 
@@ -215,7 +273,8 @@ export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
         <form onSubmit={handleSubmit} className="pt-2">
           <button
             type="submit"
-            className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-blue-500/25 transition-all flex items-center justify-center gap-2"
+            disabled={isProcessingUpload}
+            className="w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-blue-500/25 transition-all flex items-center justify-center gap-2"
           >
             <Check className="w-4 h-4 stroke-[2.5]" />
             Save New Profile Photo

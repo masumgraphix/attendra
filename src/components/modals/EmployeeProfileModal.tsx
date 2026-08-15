@@ -58,6 +58,10 @@ interface EmployeeProfileModalProps {
   initialYear?: number;
   initialMonthIndex?: number;
   onClose: () => void;
+  // Only true when the profile being viewed belongs to the logged-in
+  // user. Avatar-change controls are hidden unless this is true — nobody,
+  // including admins, should be able to change someone else's photo.
+  isOwnProfile?: boolean;
   onUpdateAvatar?: (employeeId: string, newAvatarUrl: string) => void;
   onUpdateLeaveUsed?: (employeeId: string, policyId: string, newUsed: number) => void;
   onUpdateEmployeeProfile?: (employeeId: string, updates: Partial<Employee>) => Promise<void> | void;
@@ -81,6 +85,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
   initialYear,
   initialMonthIndex,
   onClose,
+  isOwnProfile = false,
   onUpdateAvatar,
   onUpdateLeaveUsed,
   onUpdateEmployeeProfile,
@@ -343,15 +348,17 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                 alt={employee.name}
                 className="w-24 h-24 rounded-3xl object-cover ring-4 ring-white/20 shadow-xl"
               />
-              <button
-                type="button"
-                onClick={() => setIsChangeAvatarOpen(true)}
-                className="absolute inset-0 bg-slate-900/70 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white font-bold text-[10px] gap-1 cursor-pointer"
-                title="Click to Change Profile Photo"
-              >
-                <Camera className="w-5 h-5 text-white" />
-                <span>Change Photo</span>
-              </button>
+              {isOwnProfile && onUpdateAvatar && (
+                <button
+                  type="button"
+                  onClick={() => setIsChangeAvatarOpen(true)}
+                  className="absolute inset-0 bg-slate-900/70 rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center text-white font-bold text-[10px] gap-1 cursor-pointer"
+                  title="Click to Change Profile Photo"
+                >
+                  <Camera className="w-5 h-5 text-white" />
+                  <span>Change Photo</span>
+                </button>
+              )}
               <span
                 className={`absolute -bottom-1 -right-1 px-2 py-0.5 text-[9px] font-extrabold uppercase rounded-full ring-2 ring-slate-900 ${
                   employee.status === 'active' ? 'bg-emerald-500 text-white' : 'bg-amber-500 text-white'
@@ -1413,7 +1420,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
             <span className="text-xs font-semibold text-slate-500">
               Attendra Administrator System • Immutable HR Record
             </span>
-            {onUpdateAvatar && (
+            {isOwnProfile && onUpdateAvatar && (
               <button
                 type="button"
                 onClick={() => setIsChangeAvatarOpen(true)}
@@ -1433,7 +1440,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
         </div>
       </div>
 
-      {isChangeAvatarOpen && onUpdateAvatar && (
+      {isChangeAvatarOpen && isOwnProfile && onUpdateAvatar && (
         <ChangeAvatarModal
           isOpen={isChangeAvatarOpen}
           onClose={() => setIsChangeAvatarOpen(false)}

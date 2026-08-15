@@ -1448,6 +1448,23 @@ export default function App() {
       prev.map((e) => (e.id === employeeId ? { ...e, avatar: newAvatarUrl } : e))
     );
 
+    // Persist the new avatar on the matching login account too (accounts
+    // are matched either by an explicit employeeId link, or by id when no
+    // separate employeeId is set). This is what survives a page refresh —
+    // currentUser is rebuilt from userAccounts/localStorage on load, not
+    // from the employees list.
+    setUserAccounts((prev) =>
+      prev.map((acc) =>
+        (acc.employeeId || acc.id) === employeeId ? { ...acc, avatar: newAvatarUrl } : acc
+      )
+    );
+
+    // Keep the logged-in user's own avatar (header top-right, sidebar
+    // footer) in sync immediately when they update their own profile photo.
+    setCurrentUser((prev) =>
+      prev && (prev.employeeId || prev.id) === employeeId ? { ...prev, avatar: newAvatarUrl } : prev
+    );
+
     setAttendance((prev) =>
       prev.map((a) => (a.employeeId === employeeId ? { ...a, employeeAvatar: newAvatarUrl } : a))
     );
@@ -1728,6 +1745,14 @@ export default function App() {
   const pendingLeavesCount = leaveRequests.filter((l) => l.status === 'pending').length;
   const selectedEmployeeObj = employees.find((e) => e.id === selectedEmployeeId) || null;
 
+  // When an employee opens "My Profile" (activeSection === 'employees'),
+  // skip the directory grid and open their own profile modal directly.
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'employee' && activeSection === 'employees') {
+      setSelectedEmployeeId(currentUser.employeeId || currentUser.id);
+    }
+  }, [activeSection, currentUser]);
+
   // Real-time calculation for Dashboard Stat Cards
   const totalEmployeesCount = employees.length || 8;
   const todayDateStr = new Date().toISOString().split('T')[0];
@@ -1961,7 +1986,14 @@ export default function App() {
             )}
 
             {/* 3. EMPLOYEES VIEW / PROFILE */}
-            {activeSection === 'employees' && (
+            {activeSection === 'employees' && currentUser.role === 'employee' ? (
+              // Employees don't get the directory grid — "My Profile" opens
+              // their own profile modal directly. The modal itself is
+              // rendered globally below (driven by selectedEmployeeId), so
+              // this branch just renders nothing here and the effect above
+              // (or the sidebar click) takes care of opening it.
+              null
+            ) : activeSection === 'employees' && (
               <div className="animate-fade-in">
                 <EmployeeDirectory
                   employees={scopedEmployees}
@@ -2206,8 +2238,20 @@ export default function App() {
           leavePolicies={leavePolicies}
           latePenaltyRule={latePenaltyRule}
           currentUserRole={currentUser?.role}
+          isOwnProfile={
+            !!currentUser &&
+            (currentUser.employeeId || currentUser.id) === selectedEmployeeObj.id
+          }
           departments={effectiveDepartments.map((d) => d.name)}
-          onClose={() => setSelectedEmployeeId(null)}
+          onClose={() => {
+            setSelectedEmployeeId(null);
+            // If this was the employee's own auto-opened profile (My
+            // Profile section), send them back to their dashboard instead
+            // of leaving them on 'employees', which would just reopen it.
+            if (currentUser && currentUser.role === 'employee' && activeSection === 'employees') {
+              handleSelectSection('dashboard');
+            }
+          }}
           onUpdateAvatar={handleUpdateEmployeeAvatar}
           onUpdateLeaveUsed={handleUpdateEmployeeLeaveUsed}
           onUpdateEmployeeProfile={handleUpdateEmployeeProfile}
