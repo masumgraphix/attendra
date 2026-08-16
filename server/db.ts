@@ -14,6 +14,9 @@ let pgInitPromise: Promise<void> | null = null;
 
 // Cluster-wide advisory lock id used to serialize first-time schema creation.
 const ATTENDRA_SCHEMA_LOCK_ID = 918273645;
+// Bump this whenever the DDL block in initPgDatabase changes so existing
+// databases pick up new tables/columns exactly once (guarded by the lock).
+const ATTENDRA_SCHEMA_VERSION = 2;
 
 export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
   const pool = poolOverride || getPgPool();
@@ -23,23 +26,27 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
 
   pgInitPromise = (async () => {
     try {
-      // Skip all DDL when the schema already exists: on serverless, every
-      // concurrent cold start would otherwise run CREATE/ALTER in parallel,
-      // which deadlocks on Neon (AccessExclusiveLock) and silently drops the
-      // whole request burst onto the JSON fallback store.
-      const schemaCheck = await pool.query(
-        `SELECT to_regclass('public.attendance') IS NOT NULL AS schema_exists`
-      );
-      if (!schemaCheck.rows[0] || !schemaCheck.rows[0].schema_exists) {
+      // Skip all DDL when the schema is already at the current version: on
+      // serverless, every concurrent cold start would otherwise run
+      // CREATE/ALTER in parallel, which deadlocks on Neon
+      // (AccessExclusiveLock) and silently drops the whole request burst
+      // onto the JSON fallback store.
+      const readSchemaVersion = async (q: { query: (sql: string) => Promise<any> }) => {
+        try {
+          const v = await q.query(`SELECT version FROM attendra_schema_meta WHERE id = 1`);
+          return parseInt(v.rows[0]?.version, 10) || 0;
+        } catch {
+          return 0; // meta table not created yet
+        }
+      };
+
+      if ((await readSchemaVersion(pool)) < ATTENDRA_SCHEMA_VERSION) {
         const client = await pool.connect();
         try {
-          await client.query(`SET statement_timeout = '30s'`);
+          await client.query(`SET statement_timeout = '60s'`);
           await client.query(`SELECT pg_advisory_lock($1)`, [ATTENDRA_SCHEMA_LOCK_ID]);
           try {
-            const recheck = await client.query(
-              `SELECT to_regclass('public.attendance') IS NOT NULL AS schema_exists`
-            );
-            if (!recheck.rows[0] || !recheck.rows[0].schema_exists) {
+            if ((await readSchemaVersion(client)) < ATTENDRA_SCHEMA_VERSION) {
               await client.query(`
         CREATE TABLE IF NOT EXISTS users (
           id VARCHAR(64) PRIMARY KEY,
@@ -239,6 +246,13 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           color VARCHAR(50) DEFAULT '#2563EB',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS attendra_schema_meta (
+          id INT PRIMARY KEY,
+          version INT NOT NULL
+        );
+        INSERT INTO attendra_schema_meta (id, version) VALUES (1, ${ATTENDRA_SCHEMA_VERSION})
+        ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version;
               `);
             }
           } finally {
