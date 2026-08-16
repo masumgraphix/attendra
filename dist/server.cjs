@@ -34,7 +34,6 @@ __export(server_exports, {
 module.exports = __toCommonJS(server_exports);
 var import_express = __toESM(require("express"), 1);
 var import_path2 = __toESM(require("path"), 1);
-var import_vite = require("vite");
 var import_genai = require("@google/genai");
 var import_dotenv = __toESM(require("dotenv"), 1);
 var import_bcryptjs2 = __toESM(require("bcryptjs"), 1);
@@ -90,6 +89,7 @@ var initPgDatabase = async (poolOverride) => {
           salary_deduction_days INT DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS leave_used JSONB DEFAULT '{}'::jsonb;
         CREATE INDEX IF NOT EXISTS idx_employees_department ON employees(department);
         CREATE INDEX IF NOT EXISTS idx_employees_manager_id ON employees(manager_id);
         CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
@@ -130,6 +130,8 @@ var initPgDatabase = async (poolOverride) => {
           approved_by VARCHAR(64),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255);
+        ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS manager_comment TEXT;
         CREATE INDEX IF NOT EXISTS idx_leave_emp_status ON leave_requests(employee_id, status);
 
         CREATE TABLE IF NOT EXISTS leave_policies (
@@ -140,6 +142,7 @@ var initPgDatabase = async (poolOverride) => {
           carry_forward BOOLEAN DEFAULT FALSE,
           max_carry_forward_days INT DEFAULT 0
         );
+        ALTER TABLE leave_policies ADD COLUMN IF NOT EXISTS color_tag VARCHAR(20) DEFAULT 'blue';
 
         CREATE TABLE IF NOT EXISTS announcements (
           id VARCHAR(64) PRIMARY KEY,
@@ -156,6 +159,24 @@ var initPgDatabase = async (poolOverride) => {
           title VARCHAR(255) NOT NULL,
           date VARCHAR(20) NOT NULL,
           type VARCHAR(50) DEFAULT 'national'
+        );
+        ALTER TABLE holidays ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'manual';
+        ALTER TABLE holidays ADD COLUMN IF NOT EXISTS external_id VARCHAR(120);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_holidays_external_id ON holidays(external_id) WHERE external_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS holiday_sync_state (
+          id INT PRIMARY KEY DEFAULT 1,
+          last_synced_at TIMESTAMP,
+          last_result VARCHAR(255)
+        );
+        INSERT INTO holiday_sync_state (id, last_synced_at, last_result)
+        VALUES (1, NULL, 'never synced')
+        ON CONFLICT (id) DO NOTHING;
+
+        CREATE TABLE IF NOT EXISTS holiday_exclusions (
+          external_id VARCHAR(120) PRIMARY KEY,
+          title VARCHAR(255),
+          excluded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -512,8 +533,20 @@ var defaultData = {
   latePenaltyRule: { threshold: 3, deductionDays: 1 }
 };
 var dbDir = import_path.default.join(process.cwd(), "data");
-if (!import_fs.default.existsSync(dbDir)) {
-  import_fs.default.mkdirSync(dbDir, { recursive: true });
+try {
+  if (!import_fs.default.existsSync(dbDir)) {
+    import_fs.default.mkdirSync(dbDir, { recursive: true });
+  }
+} catch (err) {
+  console.error('[db] Could not create/access "data" directory, falling back to /tmp:', err);
+  dbDir = import_path.default.join("/tmp", "attendra-data");
+  try {
+    if (!import_fs.default.existsSync(dbDir)) {
+      import_fs.default.mkdirSync(dbDir, { recursive: true });
+    }
+  } catch (err2) {
+    console.error("[db] Could not create fallback /tmp data directory either:", err2);
+  }
 }
 var dbPath = import_path.default.join(dbDir, "attendra.db.json");
 var getDb = async () => {
@@ -653,6 +686,55 @@ async function sendAccountApprovedEmail(toEmail, employeeName, password) {
     return { success: false, error: err };
   }
 }
+
+// server/bdHolidays.ts
+var CURATED_BD_HOLIDAYS = [
+  // --- 2025 ---
+  { date: "2025-01-13", title: "Shab-e-Barat", type: "religious" },
+  { date: "2025-02-21", title: "Shaheed Day & International Mother Language Day", type: "national" },
+  { date: "2025-03-26", title: "Independence and National Day", type: "national" },
+  { date: "2025-03-31", title: "Eid-ul-Fitr", type: "religious" },
+  { date: "2025-04-01", title: "Eid-ul-Fitr (Day 2)", type: "religious" },
+  { date: "2025-04-02", title: "Eid-ul-Fitr (Day 3)", type: "religious" },
+  { date: "2025-04-14", title: "Bengali New Year (Pahela Baishakh)", type: "national" },
+  { date: "2025-05-01", title: "May Day (Labour Day)", type: "national" },
+  { date: "2025-05-11", title: "Buddha Purnima (Vesak)", type: "religious" },
+  { date: "2025-06-06", title: "Eid-ul-Azha", type: "religious" },
+  { date: "2025-06-07", title: "Eid-ul-Azha (Day 2)", type: "religious" },
+  { date: "2025-06-27", title: "Ashura", type: "religious" },
+  { date: "2025-08-05", title: "July Mass Uprising Day", type: "national" },
+  { date: "2025-08-15", title: "National Mourning Day", type: "national" },
+  { date: "2025-09-04", title: "Eid-e-Miladunnabi (SAW)", type: "religious" },
+  { date: "2025-10-02", title: "Durga Puja (Bijoya Dashami)", type: "religious" },
+  { date: "2025-12-16", title: "Victory Day", type: "national" },
+  { date: "2025-12-25", title: "Christmas Day", type: "religious" },
+  // --- 2026 ---
+  { date: "2026-01-24", title: "Shab-e-Barat", type: "religious" },
+  { date: "2026-02-21", title: "Shaheed Day & International Mother Language Day", type: "national" },
+  { date: "2026-03-20", title: "Eid-ul-Fitr", type: "religious" },
+  { date: "2026-03-21", title: "Eid-ul-Fitr (Day 2)", type: "religious" },
+  { date: "2026-03-22", title: "Eid-ul-Fitr (Day 3)", type: "religious" },
+  { date: "2026-03-26", title: "Independence and National Day", type: "national" },
+  { date: "2026-04-14", title: "Bengali New Year (Pahela Baishakh)", type: "national" },
+  { date: "2026-05-01", title: "May Day (Labour Day)", type: "national" },
+  { date: "2026-05-27", title: "Eid-ul-Azha", type: "religious" },
+  { date: "2026-05-28", title: "Eid-ul-Azha (Day 2)", type: "religious" },
+  { date: "2026-06-25", title: "Ashura", type: "religious" },
+  { date: "2026-08-05", title: "July Mass Uprising Day", type: "national" },
+  { date: "2026-08-15", title: "National Mourning Day", type: "national" },
+  { date: "2026-08-25", title: "Eid-e-Miladunnabi (SAW)", type: "religious" },
+  { date: "2026-10-20", title: "Durga Puja (Bijoya Dashami)", type: "religious" },
+  { date: "2026-12-16", title: "Victory Day", type: "national" },
+  { date: "2026-12-25", title: "Christmas Day", type: "religious" },
+  // --- 2027 (fixed national dates only; religious dates announced later) ---
+  { date: "2027-02-21", title: "Shaheed Day & International Mother Language Day", type: "national" },
+  { date: "2027-03-26", title: "Independence and National Day", type: "national" },
+  { date: "2027-04-14", title: "Bengali New Year (Pahela Baishakh)", type: "national" },
+  { date: "2027-05-01", title: "May Day (Labour Day)", type: "national" },
+  { date: "2027-08-05", title: "July Mass Uprising Day", type: "national" },
+  { date: "2027-12-16", title: "Victory Day", type: "national" },
+  { date: "2027-12-25", title: "Christmas Day", type: "religious" }
+];
 
 // server.ts
 import_dotenv.default.config({ path: ".env.local" });
@@ -1009,7 +1091,7 @@ app.get("/api/employees", authenticateToken, async (req, res) => {
       await initPgDatabase(pool);
       const countRes = await pool.query(`SELECT COUNT(*) FROM employees`);
       const total = parseInt(countRes.rows[0].count, 10);
-      const queryText = isPaginated ? `SELECT id, name, role, department, manager_id as "managerId", manager_name as "managerName", email, phone, status, join_date as "joinDate", avatar, salary, leave_balances as "leaveBalances", monthly_late_count as "monthlyLateCount", salary_deduction_days as "salaryDeductionDays", dob, nid_number as "nidNumber", address, blood_group as "bloodGroup", designation, location, shift, employment_type as "employmentType" FROM employees ORDER BY name ASC LIMIT $1 OFFSET $2` : `SELECT id, name, role, department, manager_id as "managerId", manager_name as "managerName", email, phone, status, join_date as "joinDate", avatar, salary, leave_balances as "leaveBalances", monthly_late_count as "monthlyLateCount", salary_deduction_days as "salaryDeductionDays", dob, nid_number as "nidNumber", address, blood_group as "bloodGroup", designation, location, shift, employment_type as "employmentType" FROM employees ORDER BY name ASC`;
+      const queryText = isPaginated ? `SELECT id, name, role, department, manager_id as "managerId", manager_name as "managerName", email, phone, status, join_date as "joinDate", avatar, salary, leave_balances as "leaveBalances", COALESCE(leave_used, '{}'::jsonb) as "leaveUsed", monthly_late_count as "monthlyLateCount", salary_deduction_days as "salaryDeductionDays", dob, nid_number as "nidNumber", address, blood_group as "bloodGroup", designation, location, shift, employment_type as "employmentType" FROM employees ORDER BY name ASC LIMIT $1 OFFSET $2` : `SELECT id, name, role, department, manager_id as "managerId", manager_name as "managerName", email, phone, status, join_date as "joinDate", avatar, salary, leave_balances as "leaveBalances", COALESCE(leave_used, '{}'::jsonb) as "leaveUsed", monthly_late_count as "monthlyLateCount", salary_deduction_days as "salaryDeductionDays", dob, nid_number as "nidNumber", address, blood_group as "bloodGroup", designation, location, shift, employment_type as "employmentType" FROM employees ORDER BY name ASC`;
       const params = isPaginated ? [limit, offset] : [];
       const empRes = await pool.query(queryText, params);
       const mappedRows = empRes.rows.map((row) => ({
@@ -1028,7 +1110,7 @@ app.get("/api/employees", authenticateToken, async (req, res) => {
           paternity: 12,
           half_day: 6
         },
-        leaveUsed: row.leave_used || row.leaveUsed || {}
+        leaveUsed: row.leaveUsed || row.leave_used || {}
       }));
       if (isPaginated) {
         return res.json({
@@ -1202,8 +1284,10 @@ app.put("/api/employees/:id", authenticateToken, async (req, res) => {
           location = COALESCE($16, location),
           shift = COALESCE($17, shift),
           employment_type = COALESCE($18, employment_type),
-          manager_name = COALESCE($19, manager_name)
-        WHERE id = $20
+          manager_name = COALESCE($19, manager_name),
+          leave_balances = COALESCE($20, leave_balances),
+          leave_used = COALESCE($21, leave_used)
+        WHERE id = $22
       `, [
         updates.name,
         updates.role,
@@ -1224,6 +1308,8 @@ app.put("/api/employees/:id", authenticateToken, async (req, res) => {
         updates.shift,
         updates.employmentType,
         updates.manager,
+        updates.leaveBalance ? JSON.stringify(updates.leaveBalance) : null,
+        updates.leaveUsed ? JSON.stringify(updates.leaveUsed) : null,
         id
       ]);
       const db2 = await getDb();
@@ -1552,14 +1638,114 @@ app.put("/api/attendance/:id", authenticateToken, async (req, res) => {
   }
   return res.status(404).json({ success: false, message: "Attendance record not found." });
 });
+app.delete("/api/attendance/:id", authenticateToken, async (req, res) => {
+  const { id } = req.params;
+  const buildDeleteAuditLog = (actorName2, rec) => ({
+    id: `AUD-${Date.now()}`,
+    timestamp: (/* @__PURE__ */ new Date()).toISOString().replace("T", " ").substring(0, 19),
+    administrator: actorName2,
+    actorRole: req.user?.role || "admin",
+    action: "Attendance Record Deleted",
+    target: `${rec.employeeName || "Unknown"} (${rec.employeeId || "unknown"})`,
+    oldValue: `Date: ${rec.date || "\u2014"}, Entry: ${rec.entryTime || "\u2014"}, Exit: ${rec.exitTime || "None"}, Status: ${rec.status || "\u2014"}`,
+    newValue: "Record Removed",
+    reason: "Incorrect entry deleted by administrator.",
+    ipAddress: req.ip || "unknown",
+    status: "warning"
+  });
+  const pool = getPgPool();
+  if (pool) {
+    try {
+      const recRes = await pool.query(
+        `SELECT id, employee_id, employee_name, department, date, check_in, check_out, status FROM attendance WHERE id = $1`,
+        [id]
+      );
+      if (recRes.rows.length === 0) {
+        return res.status(404).json({ success: false, message: "Attendance record not found." });
+      }
+      const row = recRes.rows[0];
+      let actorName2 = req.user?.email || "Unknown";
+      try {
+        const userRes = await pool.query(`SELECT name FROM users WHERE id = $1 LIMIT 1`, [req.user?.id]);
+        if (userRes.rows.length > 0 && userRes.rows[0].name) actorName2 = userRes.rows[0].name;
+      } catch {
+      }
+      await pool.query(`DELETE FROM attendance WHERE id = $1`, [id]);
+      const auditLog2 = buildDeleteAuditLog(actorName2, {
+        employeeId: row.employee_id,
+        employeeName: row.employee_name,
+        date: row.date,
+        entryTime: row.check_in,
+        exitTime: row.check_out,
+        status: row.status
+      });
+      await pool.query(
+        `INSERT INTO audit_logs (id, timestamp, user_name, action, details) VALUES ($1, $2, $3, $4, $5)`,
+        [
+          auditLog2.id,
+          auditLog2.timestamp,
+          auditLog2.administrator,
+          auditLog2.action,
+          JSON.stringify({
+            actorRole: auditLog2.actorRole,
+            target: auditLog2.target,
+            oldValue: auditLog2.oldValue,
+            newValue: auditLog2.newValue,
+            reason: auditLog2.reason,
+            ipAddress: auditLog2.ipAddress,
+            status: auditLog2.status
+          })
+        ]
+      );
+      const deletedRecord2 = {
+        id: row.id,
+        employeeId: row.employee_id,
+        employeeName: row.employee_name,
+        department: row.department,
+        date: row.date,
+        entryTime: row.check_in,
+        exitTime: row.check_out,
+        status: row.status
+      };
+      return res.json({ success: true, data: { deletedRecord: deletedRecord2, auditLog: auditLog2 } });
+    } catch (err) {
+      console.error("PG Attendance DELETE error:", err);
+    }
+  }
+  const db = await getDb();
+  const idx = db.data.attendance.findIndex((a) => a.id === id);
+  if (idx === -1) {
+    return res.status(404).json({ success: false, message: "Attendance record not found." });
+  }
+  const deletedRecord = db.data.attendance.splice(idx, 1)[0];
+  let actorName = req.user?.email || "Unknown";
+  const actorAccount = db.data.userAccounts.find((a) => a.id === req.user?.id);
+  if (actorAccount?.name) actorName = actorAccount.name;
+  const auditLog = buildDeleteAuditLog(actorName, deletedRecord);
+  db.data.auditLogs.unshift(auditLog);
+  await db.write();
+  res.json({ success: true, data: { deletedRecord, auditLog } });
+});
 app.get("/api/leave-requests", authenticateToken, async (req, res) => {
   const { page, limit, offset, isPaginated } = getPagination(req);
   const pool = getPgPool();
+  const selectCols = `id,
+    employee_id as "employeeId",
+    employee_name as "employeeName",
+    type as "leaveType",
+    start_date as "startDate",
+    end_date as "endDate",
+    days::float8 as "totalDays",
+    reason,
+    status,
+    applied_on as "appliedDate",
+    approved_by as "approvedBy",
+    manager_comment as "managerComment"`;
   if (pool) {
     try {
       const countRes = await pool.query(`SELECT COUNT(*) FROM leave_requests`);
       const total = parseInt(countRes.rows[0].count, 10);
-      const queryText = isPaginated ? `SELECT id, employee_id as "employeeId", type, start_date as "startDate", end_date as "endDate", days, reason, status, applied_on as "appliedOn", approved_by as "approvedBy" FROM leave_requests ORDER BY created_at DESC LIMIT $1 OFFSET $2` : `SELECT id, employee_id as "employeeId", type, start_date as "startDate", end_date as "endDate", days, reason, status, applied_on as "appliedOn", approved_by as "approvedBy" FROM leave_requests ORDER BY created_at DESC`;
+      const queryText = isPaginated ? `SELECT ${selectCols} FROM leave_requests ORDER BY created_at DESC LIMIT $1 OFFSET $2` : `SELECT ${selectCols} FROM leave_requests ORDER BY created_at DESC`;
       const params = isPaginated ? [limit, offset] : [];
       const lvRes = await pool.query(queryText, params);
       if (isPaginated) {
@@ -1588,23 +1774,31 @@ app.get("/api/leave-requests", authenticateToken, async (req, res) => {
 });
 app.post("/api/leave-requests", authenticateToken, async (req, res) => {
   const reqData = req.body;
+  const type = reqData.leaveType ?? reqData.type;
+  const days = reqData.totalDays ?? reqData.days ?? 1;
+  const appliedOn = reqData.appliedDate ?? reqData.appliedOn ?? (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  if (!reqData.employeeId || !type || !reqData.startDate || !reqData.endDate) {
+    return res.status(400).json({ success: false, message: "Employee, leave type, and start/end dates are required." });
+  }
   const pool = getPgPool();
   if (pool) {
     try {
       await pool.query(`
-        INSERT INTO leave_requests (id, employee_id, type, start_date, end_date, days, reason, status, applied_on, approved_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        INSERT INTO leave_requests (id, employee_id, employee_name, type, start_date, end_date, days, reason, status, applied_on, approved_by, manager_comment)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
       `, [
         reqData.id || `LV-${Date.now()}`,
         reqData.employeeId,
-        reqData.type,
+        reqData.employeeName || null,
+        type,
         reqData.startDate,
         reqData.endDate,
-        reqData.days || 1,
+        days,
         reqData.reason || "",
         reqData.status || "pending",
-        reqData.appliedOn || (/* @__PURE__ */ new Date()).toISOString().split("T")[0],
-        reqData.approvedBy || null
+        appliedOn,
+        reqData.approvedBy || null,
+        reqData.managerComment || null
       ]);
       return res.json({ success: true, data: reqData });
     } catch (err) {
@@ -1617,6 +1811,7 @@ app.post("/api/leave-requests", authenticateToken, async (req, res) => {
   res.json({ success: true, data: reqData });
 });
 app.put("/api/leave-requests/:id", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
   const { id } = req.params;
   const updates = req.body;
   const pool = getPgPool();
@@ -1624,10 +1819,28 @@ app.put("/api/leave-requests/:id", authenticateToken, async (req, res) => {
     try {
       await pool.query(`
         UPDATE leave_requests SET
-          status = COALESCE($1, status),
-          approved_by = COALESCE($2, approved_by)
-        WHERE id = $3
-      `, [updates.status, updates.approvedBy, id]);
+          employee_name = COALESCE($1, employee_name),
+          type = COALESCE($2, type),
+          start_date = COALESCE($3, start_date),
+          end_date = COALESCE($4, end_date),
+          days = COALESCE($5, days),
+          reason = COALESCE($6, reason),
+          status = COALESCE($7, status),
+          approved_by = COALESCE($8, approved_by),
+          manager_comment = COALESCE($9, manager_comment)
+        WHERE id = $10
+      `, [
+        updates.employeeName ?? null,
+        updates.leaveType ?? updates.type ?? null,
+        updates.startDate ?? null,
+        updates.endDate ?? null,
+        updates.totalDays ?? updates.days ?? null,
+        updates.reason ?? null,
+        updates.status ?? null,
+        updates.approvedBy ?? null,
+        updates.managerComment ?? null,
+        id
+      ]);
       return res.json({ success: true, data: { id, ...updates } });
     } catch (err) {
       console.error("PG Leave PUT error:", err);
@@ -1641,6 +1854,23 @@ app.put("/api/leave-requests/:id", authenticateToken, async (req, res) => {
     return res.json({ success: true, data: db.data.leaveRequests[idx] });
   }
   return res.status(404).json({ success: false, message: "Leave request not found." });
+});
+app.delete("/api/leave-requests/:id", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const { id } = req.params;
+  const pool = getPgPool();
+  if (pool) {
+    try {
+      await pool.query(`DELETE FROM leave_requests WHERE id = $1`, [id]);
+      return res.json({ success: true, id });
+    } catch (err) {
+      console.error("PG Leave DELETE error:", err);
+    }
+  }
+  const db = await getDb();
+  db.data.leaveRequests = db.data.leaveRequests.filter((l) => l.id !== id);
+  await db.write();
+  res.json({ success: true, id });
 });
 app.get("/api/departments", async (req, res) => {
   const pool = getPgPool();
@@ -1724,7 +1954,15 @@ app.get("/api/leave-policies", authenticateToken, async (req, res) => {
   const pool = getPgPool();
   if (pool) {
     try {
-      const lpRes = await pool.query(`SELECT id, name, code, total_days as "totalDays", carry_forward as "carryForward", max_carry_forward_days as "maxCarryForwardDays" FROM leave_policies`);
+      const lpRes = await pool.query(`
+        SELECT id, name, code,
+               total_days as "yearlyQuota",
+               total_days as "totalDays",
+               carry_forward as "carryForward",
+               max_carry_forward_days as "maxCarryForwardDays",
+               COALESCE(color_tag, 'blue') as "colorTag"
+        FROM leave_policies ORDER BY name ASC
+      `);
       return res.json({ success: true, data: lpRes.rows });
     } catch (err) {
       console.error("PG LeavePolicies error:", err);
@@ -1734,18 +1972,29 @@ app.get("/api/leave-policies", authenticateToken, async (req, res) => {
   res.json({ success: true, data: db.data.leavePolicies });
 });
 app.put("/api/leave-policies", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
   const pool = getPgPool();
   if (pool && Array.isArray(req.body)) {
     try {
+      const ids = req.body.map((lp) => String(lp.id));
       for (const lp of req.body) {
+        const totalDays = lp.yearlyQuota ?? lp.totalDays ?? 10;
+        const carryForward = lp.carryForward ?? false;
+        const code = lp.code || String(lp.name || "LV").split(/\s+/).map((w) => w[0]).join("").toUpperCase().slice(0, 5);
         await pool.query(`
-          INSERT INTO leave_policies (id, name, code, total_days, carry_forward, max_carry_forward_days)
-          VALUES ($1, $2, $3, $4, $5, $6)
+          INSERT INTO leave_policies (id, name, code, total_days, carry_forward, max_carry_forward_days, color_tag)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
           ON CONFLICT (id) DO UPDATE SET
+            name = EXCLUDED.name,
+            code = EXCLUDED.code,
             total_days = EXCLUDED.total_days,
             carry_forward = EXCLUDED.carry_forward,
-            max_carry_forward_days = EXCLUDED.max_carry_forward_days
-        `, [lp.id, lp.name, lp.code, lp.totalDays, lp.carryForward, lp.maxCarryForwardDays || 0]);
+            max_carry_forward_days = EXCLUDED.max_carry_forward_days,
+            color_tag = EXCLUDED.color_tag
+        `, [lp.id, lp.name, code, totalDays, carryForward, lp.maxCarryForwardDays || 0, lp.colorTag || "blue"]);
+      }
+      if (ids.length > 0) {
+        await pool.query(`DELETE FROM leave_policies WHERE id != ALL($1::varchar[])`, [ids]);
       }
       return res.json({ success: true, data: req.body });
     } catch (err) {
@@ -1807,40 +2056,264 @@ app.delete("/api/announcements/:id", authenticateToken, async (req, res) => {
   await db.write();
   res.json({ success: true, id });
 });
-app.get("/api/holidays", authenticateToken, async (req, res) => {
+var NAGER_API_BASE = "https://date.nager.at/api/v3/PublicHolidays";
+var HOLIDAY_SYNC_STALE_MS = 7 * 24 * 60 * 60 * 1e3;
+var requireAdminRole = (req, res) => {
+  const role = req.user?.role;
+  if (role !== "admin" && role !== "super_admin") {
+    res.status(403).json({ success: false, message: "Only Admin or Super Admin can manage holidays." });
+    return false;
+  }
+  return true;
+};
+var govExternalId = (date) => `gov-${date}`;
+var fetchNagerHolidays = async () => {
+  const thisYear = (/* @__PURE__ */ new Date()).getFullYear();
+  const years = [thisYear, thisYear + 1];
+  const merged = /* @__PURE__ */ new Map();
+  await Promise.all(years.map(async (year) => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 8e3);
+      const resp = await fetch(`${NAGER_API_BASE}/${year}/BD`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (!resp.ok) return;
+      const entries = await resp.json();
+      for (const e of entries) {
+        if (e.date && e.name) {
+          merged.set(e.date, { title: e.name, type: e.types?.includes("Public") ? "national" : "optional" });
+        }
+      }
+    } catch (err) {
+      console.error(`Nager holiday fetch failed for ${year}:`, err);
+    }
+  }));
+  return merged;
+};
+var buildGovernmentCandidates = async () => {
+  const candidates = await fetchNagerHolidays();
+  for (const { date, title, type } of CURATED_BD_HOLIDAYS) {
+    candidates.set(date, { title, type });
+  }
+  return candidates;
+};
+var syncGovernmentHolidays = async () => {
+  const candidates = await buildGovernmentCandidates();
+  const source = `date.nager.at + curated BD calendar (${(/* @__PURE__ */ new Date()).getFullYear()}-${(/* @__PURE__ */ new Date()).getFullYear() + 1})`;
+  let added = 0, updated = 0, skipped = 0;
+  const pool = getPgPool();
+  if (pool) {
+    const exclusions2 = /* @__PURE__ */ new Set();
+    const manualDates = /* @__PURE__ */ new Set();
+    try {
+      const exRes = await pool.query(`SELECT external_id FROM holiday_exclusions`);
+      for (const row of exRes.rows) exclusions2.add(row.external_id);
+      const manualRes = await pool.query(`SELECT date FROM holidays WHERE source = 'manual' OR source IS NULL`);
+      for (const row of manualRes.rows) manualDates.add(row.date);
+    } catch (err) {
+      console.error("Holiday sync pre-check error:", err);
+    }
+    for (const [date, info] of candidates) {
+      const extId = govExternalId(date);
+      if (exclusions2.has(extId)) {
+        skipped++;
+        continue;
+      }
+      if (manualDates.has(date)) {
+        skipped++;
+        continue;
+      }
+      try {
+        const res = await pool.query(`
+          INSERT INTO holidays (id, title, date, type, source, external_id)
+          VALUES ($1, $2, $3, $4, 'government', $5)
+          ON CONFLICT (external_id) WHERE external_id IS NOT NULL DO UPDATE SET
+            title = EXCLUDED.title, date = EXCLUDED.date, type = EXCLUDED.type
+          RETURNING (xmax = 0) AS inserted
+        `, [`GOV-${date}`, info.title, date, info.type, extId]);
+        if (res.rows[0]?.inserted) added++;
+        else updated++;
+      } catch (err) {
+        console.error(`Holiday sync upsert failed for ${date}:`, err);
+      }
+    }
+    try {
+      await pool.query(`
+        INSERT INTO holiday_sync_state (id, last_synced_at, last_result)
+        VALUES (1, NOW(), $1)
+        ON CONFLICT (id) DO UPDATE SET last_synced_at = NOW(), last_result = $1
+      `, [`${added} added, ${updated} updated, ${skipped} skipped`]);
+    } catch (err) {
+      console.error("Holiday sync state update error:", err);
+    }
+    return { added, updated, skipped, source };
+  }
+  const db = await getDb();
+  if (!db.data.holidays) db.data.holidays = [];
+  const byExternalId = new Map(db.data.holidays.map((h) => [h.externalId ?? null, h]));
+  const byDate = new Set(db.data.holidays.map((h) => h.date));
+  const exclusions = new Set(db.data.holidayExclusions || []);
+  for (const [date, info] of candidates) {
+    const extId = govExternalId(date);
+    if (exclusions.has(extId)) {
+      skipped++;
+      continue;
+    }
+    const existing = byExternalId.get(extId);
+    if (existing) {
+      existing.title = info.title;
+      existing.type = info.type;
+      updated++;
+    } else if (byDate.has(date)) {
+      skipped++;
+      continue;
+    } else {
+      db.data.holidays.push({
+        id: `GOV-${date}`,
+        title: info.title,
+        date,
+        dayOfWeek: void 0,
+        type: info.type,
+        appliesTo: "All Employees",
+        source: "government",
+        externalId: extId
+      });
+      added++;
+    }
+  }
+  db.data.holidaySyncState = {
+    lastSyncedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    lastResult: `${added} added, ${updated} updated, ${skipped} skipped`
+  };
+  await db.write();
+  return { added, updated, skipped, source };
+};
+var getHolidaysFromStore = async () => {
   const pool = getPgPool();
   if (pool) {
     try {
-      const holRes = await pool.query(`SELECT id, title, date, type FROM holidays ORDER BY date ASC`);
-      return res.json({ success: true, data: holRes.rows });
+      const holRes = await pool.query(
+        `SELECT id, title, date, type, COALESCE(source, 'manual') AS source, external_id AS "externalId" FROM holidays ORDER BY date ASC`
+      );
+      return holRes.rows;
     } catch (err) {
       console.error("PG Holidays GET error:", err);
     }
   }
   const db = await getDb();
-  res.json({ success: true, data: db.data.holidays });
+  return db.data.holidays.map((h) => ({ ...h, source: h.source ?? "manual" }));
+};
+var getHolidaySyncStatus = async () => {
+  const pool = getPgPool();
+  let last;
+  if (pool) {
+    try {
+      const res = await pool.query(`SELECT last_synced_at AS "lastSyncedAt" FROM holiday_sync_state WHERE id = 1`);
+      last = res.rows[0]?.lastSyncedAt;
+    } catch {
+      last = void 0;
+    }
+  } else {
+    const db = await getDb();
+    last = db.data.holidaySyncState?.lastSyncedAt;
+  }
+  if (!last) return "never";
+  return Date.now() - new Date(last).getTime() > HOLIDAY_SYNC_STALE_MS ? "stale" : "fresh";
+};
+app.get("/api/holidays", authenticateToken, async (req, res) => {
+  try {
+    const status = await getHolidaySyncStatus();
+    if (status === "never") {
+      await syncGovernmentHolidays();
+    } else if (status === "stale") {
+      syncGovernmentHolidays().catch((err) => console.error("Background holiday sync failed:", err));
+    }
+  } catch (err) {
+    console.error("Holiday auto-sync check failed:", err);
+  }
+  res.json({ success: true, data: await getHolidaysFromStore() });
+});
+app.post("/api/holidays/sync", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  try {
+    const result = await syncGovernmentHolidays();
+    return res.json({ success: true, message: `Government holidays synced (${result.added} added, ${result.updated} refreshed, ${result.skipped} skipped).`, result, data: await getHolidaysFromStore() });
+  } catch (err) {
+    console.error("Holiday sync error:", err);
+    return res.status(500).json({ success: false, message: "Failed to sync government holidays." });
+  }
 });
 app.post("/api/holidays", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
   const item = req.body;
+  if (!item || !item.title || !item.date) {
+    return res.status(400).json({ success: false, message: "Holiday title and date are required." });
+  }
+  const existing = await getHolidaysFromStore();
+  if (existing.some((h) => h.date === item.date && h.title.toLowerCase() === String(item.title).toLowerCase())) {
+    return res.status(409).json({ success: false, message: "This holiday already exists on the same date." });
+  }
+  const record = { ...item, source: "manual", externalId: void 0 };
   const pool = getPgPool();
   if (pool) {
     try {
-      await pool.query(`INSERT INTO holidays (id, title, date, type) VALUES ($1, $2, $3, $4)`, [item.id || `HOL-${Date.now()}`, item.title, item.date, item.type || "national"]);
-      return res.json({ success: true, data: item });
+      await pool.query(
+        `INSERT INTO holidays (id, title, date, type, source) VALUES ($1, $2, $3, $4, 'manual')`,
+        [item.id || `HOL-${Date.now()}`, item.title, item.date, item.type || "national"]
+      );
+      return res.json({ success: true, data: record });
     } catch (err) {
       console.error("PG Holidays POST error:", err);
     }
   }
   const db = await getDb();
-  db.data.holidays.push(item);
+  db.data.holidays.push(record);
   await db.write();
-  res.json({ success: true, data: item });
+  res.json({ success: true, data: record });
+});
+app.put("/api/holidays/:id", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
+  const { id } = req.params;
+  const { title, date, type } = req.body || {};
+  if (!title || !date) {
+    return res.status(400).json({ success: false, message: "Holiday title and date are required." });
+  }
+  const pool = getPgPool();
+  if (pool) {
+    try {
+      const cur = await pool.query(`SELECT source, external_id AS "externalId" FROM holidays WHERE id = $1`, [id]);
+      const row = cur.rows[0];
+      if (!row) return res.status(404).json({ success: false, message: "Holiday not found." });
+      if ((row.source ?? "manual") === "government" && row.externalId) {
+        await pool.query(`INSERT INTO holiday_exclusions (external_id, title) VALUES ($1, $2) ON CONFLICT (external_id) DO NOTHING`, [row.externalId, title]);
+      }
+      await pool.query(
+        `UPDATE holidays SET title = $1, date = $2, type = $3, source = 'manual', external_id = NULL WHERE id = $4`,
+        [title, date, type || "national", id]
+      );
+      return res.json({ success: true, data: { id, title, date, type: type || "national", source: "manual" } });
+    } catch (err) {
+      console.error("PG Holidays PUT error:", err);
+    }
+  }
+  const db = await getDb();
+  const idx = db.data.holidays.findIndex((h) => h.id === id);
+  if (idx === -1) return res.status(404).json({ success: false, message: "Holiday not found." });
+  db.data.holidays[idx] = { ...db.data.holidays[idx], title, date, type: type || "national", source: "manual", externalId: void 0 };
+  await db.write();
+  res.json({ success: true, data: db.data.holidays[idx] });
 });
 app.delete("/api/holidays/:id", authenticateToken, async (req, res) => {
+  if (!requireAdminRole(req, res)) return;
   const { id } = req.params;
   const pool = getPgPool();
   if (pool) {
     try {
+      const cur = await pool.query(`SELECT source, external_id AS "externalId" FROM holidays WHERE id = $1`, [id]);
+      const row = cur.rows[0];
+      if (row && (row.source ?? "manual") === "government" && row.externalId) {
+        await pool.query(`INSERT INTO holiday_exclusions (external_id, title) VALUES ($1, $2) ON CONFLICT (external_id) DO NOTHING`, [row.externalId, row.title]);
+      }
       await pool.query(`DELETE FROM holidays WHERE id = $1`, [id]);
       return res.json({ success: true, id });
     } catch (err) {
@@ -1852,6 +2325,29 @@ app.delete("/api/holidays/:id", authenticateToken, async (req, res) => {
   await db.write();
   res.json({ success: true, id });
 });
+var expandAuditRow = (row) => {
+  let extra = null;
+  if (row.details && typeof row.details === "string") {
+    try {
+      const parsed = JSON.parse(row.details);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) extra = parsed;
+    } catch {
+    }
+  }
+  return {
+    id: row.id,
+    timestamp: row.timestamp,
+    administrator: row.user || row.user_name || "System",
+    actorRole: extra?.actorRole || "admin",
+    action: row.action,
+    target: extra?.target || "",
+    oldValue: extra?.oldValue,
+    newValue: extra?.newValue,
+    reason: extra?.reason,
+    ipAddress: extra?.ipAddress,
+    status: extra?.status || "success"
+  };
+};
 app.get("/api/audit-logs", authenticateToken, async (req, res) => {
   const { page, limit, offset, isPaginated } = getPagination(req);
   const pool = getPgPool();
@@ -1862,16 +2358,17 @@ app.get("/api/audit-logs", authenticateToken, async (req, res) => {
       const queryText = isPaginated ? `SELECT id, timestamp, user_name as "user", action, details FROM audit_logs ORDER BY timestamp DESC LIMIT $1 OFFSET $2` : `SELECT id, timestamp, user_name as "user", action, details FROM audit_logs ORDER BY timestamp DESC`;
       const params = isPaginated ? [limit, offset] : [];
       const logRes = await pool.query(queryText, params);
+      const logs = logRes.rows.map(expandAuditRow);
       if (isPaginated) {
-        return res.json({ success: true, data: logRes.rows, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
+        return res.json({ success: true, data: logs, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } });
       }
-      return res.json({ success: true, data: logRes.rows });
+      return res.json({ success: true, data: logs });
     } catch (err) {
       console.error("PG AuditLogs GET error:", err);
     }
   }
   const db = await getDb();
-  let list = db.data.auditLogs;
+  const list = db.data.auditLogs.map((l) => ({ ...l, administrator: l.administrator || l.user || "System" }));
   if (isPaginated) {
     return res.json({ success: true, data: list.slice(offset, offset + limit), pagination: { page, limit, total: list.length, totalPages: Math.ceil(list.length / limit) } });
   }
@@ -1879,10 +2376,23 @@ app.get("/api/audit-logs", authenticateToken, async (req, res) => {
 });
 app.post("/api/audit-logs", authenticateToken, async (req, res) => {
   const item = req.body;
+  const userName = item.administrator || item.user || "System";
+  let details = item.details || "";
+  if (!details && (item.actorRole || item.target || item.oldValue || item.newValue || item.reason || item.ipAddress || item.status)) {
+    details = JSON.stringify({
+      actorRole: item.actorRole,
+      target: item.target,
+      oldValue: item.oldValue,
+      newValue: item.newValue,
+      reason: item.reason,
+      ipAddress: item.ipAddress,
+      status: item.status
+    });
+  }
   const pool = getPgPool();
   if (pool) {
     try {
-      await pool.query(`INSERT INTO audit_logs (id, timestamp, user_name, action, details) VALUES ($1, $2, $3, $4, $5)`, [item.id || `LOG-${Date.now()}`, item.timestamp || (/* @__PURE__ */ new Date()).toISOString(), item.user || "System", item.action, item.details || ""]);
+      await pool.query(`INSERT INTO audit_logs (id, timestamp, user_name, action, details) VALUES ($1, $2, $3, $4, $5)`, [item.id || `LOG-${Date.now()}`, item.timestamp || (/* @__PURE__ */ new Date()).toISOString(), userName, item.action, details]);
       return res.json({ success: true, data: item });
     } catch (err) {
       console.error("PG AuditLogs POST error:", err);
@@ -2412,7 +2922,8 @@ app.post("/api/reports/export", authenticateToken, (req, res) => {
 });
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
-    const vite = await (0, import_vite.createServer)({
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa"
     });

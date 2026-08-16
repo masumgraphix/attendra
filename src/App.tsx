@@ -388,8 +388,22 @@ export default function App() {
     const todayStr = new Date().toISOString().split('T')[0];
     const empId = currentUser.employeeId || currentUser.id;
 
-    const existingIdx = attendance.findIndex((a) => a.employeeId === empId && a.date === todayStr);
-    if (existingIdx === -1) return;
+    // Match the same record the Dashboard widget displays (manually-created
+    // entries may be linked by employeeId or only by employee name), and only
+    // update a record that is still missing its check-out.
+    const existingIdx = attendance.findIndex(
+      (a) =>
+        a.date === todayStr &&
+        !a.exitTime &&
+        (a.employeeId === empId ||
+          a.employeeId === currentUser.id ||
+          (currentUser.employeeId && a.employeeId === currentUser.employeeId) ||
+          (a.employeeName && currentUser.name && a.employeeName.toLowerCase() === currentUser.name.toLowerCase()))
+    );
+    if (existingIdx === -1) {
+      addToast('error', 'Check-Out Unavailable', 'No active check-in found for today. A check-in is required before checking out.');
+      return;
+    }
 
     const existingRecord = attendance[existingIdx];
     const updatedRecord: AttendanceRecord = {
@@ -1265,7 +1279,9 @@ export default function App() {
     addToast(
       'success',
       existingIndex >= 0 ? 'Attendance Updated' : 'Attendance Logged',
-      `Saved ${data.status} entry for ${emp.name} (${workHours} hrs logged).`
+      data.exitTime
+        ? `Saved ${data.status} entry for ${emp.name} (${workHours} hrs logged).`
+        : `Saved ${data.status} check-in for ${emp.name}. Check-out pending — the employee can check out from their Dashboard.`
     );
   };
 
@@ -1300,7 +1316,8 @@ export default function App() {
       notes: data.notes,
     };
 
-    setLeaveRequests((prev) => [newLeave, ...prev]);
+    const updatedList = [newLeave, ...leaveRequests];
+    setLeaveRequests(updatedList);
 
     api.createLeaveRequest(newLeave).catch((err) =>
       console.error('Failed to save leave request to server DB:', err)
@@ -1310,17 +1327,12 @@ export default function App() {
       setEmployees((prev) =>
         prev.map((e) =>
           e.id === emp.id
-            ? {
-                ...e,
-                status: 'on_leave',
-                leaveBalance: {
-                  ...e.leaveBalance,
-                  [data.leaveType]: Math.max(0, ((e.leaveBalance as any)[data.leaveType] || 0) - calculatedDays),
-                },
-              }
+            ? { ...e, status: 'on_leave' }
             : e
         )
       );
+      // Leave balance now derives from the approved record history.
+      recomputeEmployeeLeaveUsed(emp.id, updatedList);
     }
 
     const newLog: AuditLog = {
@@ -1356,9 +1368,9 @@ export default function App() {
     const targetRec = attendance.find((a) => a.id === data.recordId);
     if (!targetRec) return;
 
-    const { workHours, overtimeHours } = calculateWorkHours(data.entryTime, data.exitTime);
+    const { workHours, overtimeHours } = calculateWorkHours(data.entryTime, data.exitTime || null);
     const oldValueStr = `Entry: ${targetRec.entryTime}, Exit: ${targetRec.exitTime || 'Active'}, Status: ${targetRec.status}`;
-    const newValueStr = `Entry: ${data.entryTime}, Exit: ${data.exitTime}, Status: ${data.status}`;
+    const newValueStr = `Entry: ${data.entryTime}, Exit: ${data.exitTime || 'Active (pending check-out)'}, Status: ${data.status}`;
 
     setAttendance((prev) =>
       prev.map((a) =>
@@ -1366,7 +1378,7 @@ export default function App() {
           ? {
               ...a,
               entryTime: data.entryTime,
-              exitTime: data.exitTime,
+              exitTime: data.exitTime || null,
               workHours,
               overtimeHours,
               status: data.status,
@@ -1379,7 +1391,7 @@ export default function App() {
 
     api.updateAttendance(data.recordId, {
       entryTime: data.entryTime,
-      exitTime: data.exitTime,
+      exitTime: data.exitTime || null,
       workHours,
       overtimeHours,
       status: data.status,
@@ -1404,7 +1416,13 @@ export default function App() {
     };
 
     setAuditLogs((prev) => [newLog, ...prev]);
-    addToast('success', 'Record Corrected', `Updated entry for ${targetRec.employeeName} (${workHours} hrs recalculated).`);
+    addToast(
+      'success',
+      'Record Corrected',
+      data.exitTime
+        ? `Updated entry for ${targetRec.employeeName} (${workHours} hrs recalculated).`
+        : `Updated check-in for ${targetRec.employeeName}. Check-out still pending.`
+    );
   };
 
   const handleOpenCorrectionModal = (recordId?: string) => {
@@ -1416,28 +1434,45 @@ export default function App() {
     setIsCorrectionModalOpen(true);
   };
 
-  const handleDeleteAttendanceRecord = (recordId: string) => {
+  const handleDeleteAttendanceRecord = async (recordId: string) => {
+    if (!currentUser) return;
+    if (currentUser.role === 'employee') {
+      addToast('error', 'Access Restricted', 'Only administrators can delete attendance records.');
+      return;
+    }
     const targetRec = attendance.find((a) => a.id === recordId);
     if (!targetRec) return;
 
-    setAttendance((prev) => prev.filter((a) => a.id !== recordId));
+    try {
+      const result = await api.deleteAttendance(recordId);
+      setAttendance((prev) => prev.filter((a) => a.id !== recordId));
 
-    const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      administrator: currentUser?.name || 'Admin',
-      actorRole: currentUser?.role || 'admin',
-      action: 'Attendance Record Deleted',
-      target: `${targetRec.employeeName} (${targetRec.employeeId})`,
-      oldValue: `Entry: ${targetRec.entryTime}, Exit: ${targetRec.exitTime || 'None'}, Status: ${targetRec.status}`,
-      newValue: 'Record Removed',
-      reason: 'Incorrect entry deleted by user.',
-      ipAddress: '192.168.1.10',
-      status: 'warning',
-    };
+      // Prefer the audit entry the server wrote (real identity of the deleter);
+      // fall back to a locally-built one if the server didn't return it.
+      const serverLog = result?.auditLog;
+      const newLog: AuditLog =
+        serverLog && serverLog.action
+          ? serverLog
+          : {
+              id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+              timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
+              administrator: currentUser.name,
+              actorRole: currentUser.role,
+              action: 'Attendance Record Deleted',
+              target: `${targetRec.employeeName} (${targetRec.employeeId})`,
+              oldValue: `Date: ${targetRec.date}, Entry: ${targetRec.entryTime}, Exit: ${targetRec.exitTime || 'None'}, Status: ${targetRec.status}`,
+              newValue: 'Record Removed',
+              reason: 'Incorrect entry deleted by administrator.',
+              ipAddress: '192.168.1.10',
+              status: 'warning',
+            };
 
-    setAuditLogs((prev) => [newLog, ...prev]);
-    addToast('info', 'Attendance Record Deleted', `Removed entry for ${targetRec.employeeName}. Audit trail logged.`);
+      setAuditLogs((prev) => [newLog, ...prev]);
+      addToast('info', 'Attendance Record Deleted', `Removed entry for ${targetRec.employeeName}. Action logged in Activity History.`);
+    } catch (err) {
+      console.error('Failed to delete attendance record on server DB:', err);
+      addToast('error', 'Delete Failed', 'Could not delete the attendance record from the database. The record was kept — please try again.');
+    }
   };
 
   const handleUpdateEmployeeAvatar = (employeeId: string, newAvatarUrl: string) => {
@@ -1574,13 +1609,15 @@ export default function App() {
     }
   };
 
-  const handleSaveLeavePolicies = (updatedPolicies?: LeavePolicy[]) => {
+  const handleSaveLeavePolicies = async (updatedPolicies?: LeavePolicy[]) => {
     if (updatedPolicies) {
+      try {
+        await api.updateLeavePolicies(updatedPolicies);
+      } catch (err: any) {
+        console.error('Failed to update leave policies on server DB:', err);
+        addToast('error', 'Save Failed', err?.message || 'Leave policies could not be saved to the database. Changes kept locally only.');
+      }
       setLeavePolicies(updatedPolicies);
-
-      api.updateLeavePolicies(updatedPolicies).catch((err) =>
-        console.error('Failed to update leave policies on server DB:', err)
-      );
 
       const newLog: AuditLog = {
         id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
@@ -1591,7 +1628,7 @@ export default function App() {
         target: 'Global Leave Policy Settings',
         oldValue: 'Previous Quotas',
         newValue: `${updatedPolicies.length} Active Policies`,
-        reason: 'Super Admin updated global leave quotas and policy settings.',
+        reason: 'Admin updated global leave quotas and policy settings.',
         ipAddress: '192.168.1.10',
         status: 'success',
       };
@@ -1644,9 +1681,79 @@ export default function App() {
     addToast('success', 'Leave Balance Adjusted', `Updated leave used count to ${newUsed} days for ${emp.name}.`);
   };
 
+  /**
+   * Derives an employee's used-leave-days per type from their approved leave
+   * records for the current year and persists it, so balance always reflects
+   * the actual leave history (including admin corrections).
+   */
+  const recomputeEmployeeLeaveUsed = (employeeId: string, requests: LeaveRequest[]) => {
+    const year = String(new Date().getFullYear());
+    const usedByType: Record<string, number> = {};
+    for (const lr of requests) {
+      if (lr.employeeId !== employeeId || lr.status !== 'approved') continue;
+      if (!lr.startDate?.startsWith(year)) continue;
+      usedByType[lr.leaveType] = (usedByType[lr.leaveType] || 0) + (lr.totalDays || 0);
+    }
+    setEmployees((prev) =>
+      prev.map((e) => (e.id === employeeId ? { ...e, leaveUsed: usedByType } : e))
+    );
+    api.updateEmployee(employeeId, { leaveUsed: usedByType }).catch((err) =>
+      console.error('Failed to persist recomputed leave balance:', err)
+    );
+  };
+
+  /** Admin adds a past/present leave record directly to an employee's history. */
+  const handleAddLeaveRecord = (record: Omit<LeaveRequest, 'id' | 'employeeName' | 'employeeAvatar' | 'department' | 'appliedDate'> & { employeeId: string }) => {
+    const emp = employees.find((e) => e.id === record.employeeId);
+    const newLeave: LeaveRequest = {
+      id: `LV-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      employeeId: record.employeeId,
+      employeeName: emp?.name || record.employeeId,
+      employeeAvatar: emp?.avatar || '',
+      department: emp?.department || '—',
+      appliedDate: new Date().toISOString().split('T')[0],
+      ...record,
+    };
+    const updated = [newLeave, ...leaveRequests];
+    setLeaveRequests(updated);
+    api.createLeaveRequest(newLeave).catch((err) =>
+      console.error('Failed to save leave record to server DB:', err)
+    );
+    recomputeEmployeeLeaveUsed(record.employeeId, updated);
+    addToast('success', 'Leave Record Added', `${newLeave.totalDays} day(s) of ${newLeave.leaveType} recorded for ${newLeave.employeeName}.`);
+  };
+
+  /** Admin edits/corrects an existing leave record (type, dates, duration, status). */
+  const handleEditLeaveRecord = (id: string, updates: Partial<LeaveRequest>) => {
+    const existing = leaveRequests.find((l) => l.id === id);
+    const updatedList = leaveRequests.map((l) => (l.id === id ? { ...l, ...updates } : l));
+    setLeaveRequests(updatedList);
+    api.updateLeaveRequest(id, updates).catch((err) =>
+      console.error('Failed to update leave record on server DB:', err)
+    );
+    if (existing) {
+      recomputeEmployeeLeaveUsed(existing.employeeId, updatedList);
+    }
+    addToast('success', 'Leave Record Updated', `Corrections saved for ${existing?.employeeName || 'the employee'}'s leave record.`);
+  };
+
+  /** Admin deletes a leave record from an employee's history. */
+  const handleDeleteLeaveRecord = (id: string) => {
+    const existing = leaveRequests.find((l) => l.id === id);
+    const updatedList = leaveRequests.filter((l) => l.id !== id);
+    setLeaveRequests(updatedList);
+    api.deleteLeaveRequest(id).catch((err) =>
+      console.error('Failed to delete leave record on server DB:', err)
+    );
+    if (existing) {
+      recomputeEmployeeLeaveUsed(existing.employeeId, updatedList);
+    }
+    addToast('warning', 'Leave Record Deleted', `Leave record ${id} removed and balance recalculated.`);
+  };
+
   const handleAddHoliday = (newHoliday: Omit<CompanyHoliday, 'id'>) => {
-    const id = `HOL-${Math.floor(100 + Math.random() * 900)}`;
-    const fullHoliday: CompanyHoliday = { id, ...newHoliday };
+    const id = `HOL-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+    const fullHoliday: CompanyHoliday = { id, ...newHoliday, source: newHoliday.source ?? 'manual' };
     setHolidays((prev) => [...prev, fullHoliday]);
 
     api.createHoliday(fullHoliday).catch((err) =>
@@ -1654,6 +1761,29 @@ export default function App() {
     );
 
     addToast('success', 'Holiday Added', `Added "${newHoliday.title}" to company holiday calendar.`);
+  };
+
+  const handleUpdateHoliday = (id: string, updates: Partial<CompanyHoliday>) => {
+    setHolidays((prev) =>
+      prev.map((h) => (h.id === id ? { ...h, ...updates, source: 'manual', externalId: undefined } : h))
+    );
+
+    api.updateHoliday(id, updates).catch((err) =>
+      console.error('Failed to update holiday on server DB:', err)
+    );
+
+    addToast('success', 'Holiday Updated', `"${updates.title ?? 'Holiday'}" saved. Government entries become custom when edited.`);
+  };
+
+  const handleSyncHolidays = async () => {
+    try {
+      const synced = await api.syncHolidays();
+      setHolidays(synced);
+      addToast('success', 'Government Holidays Synced', `Fetched the latest Bangladesh government holidays (${synced.filter((h) => h.source === 'government').length} government entries).`);
+    } catch (err: any) {
+      console.error('Failed to sync government holidays:', err);
+      addToast('error', 'Sync Failed', err?.message || 'Could not fetch government holiday data.');
+    }
   };
 
   const handleDeleteHoliday = (id: string) => {
@@ -1686,6 +1816,15 @@ export default function App() {
       addToast('error', 'Update Failed', 'Could not persist profile updates.');
     }
   };
+
+  // When an employee opens "My Profile" (activeSection === 'employees'),
+  // skip the directory grid and open their own profile modal directly.
+  // NOTE: must stay above the login early-return so hook order is constant.
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'employee' && activeSection === 'employees') {
+      setSelectedEmployeeId(currentUser.employeeId || currentUser.id);
+    }
+  }, [activeSection, currentUser]);
 
   // If user is not logged in, display single Login screen
   if (!currentUser) {
@@ -1744,14 +1883,6 @@ export default function App() {
 
   const pendingLeavesCount = leaveRequests.filter((l) => l.status === 'pending').length;
   const selectedEmployeeObj = employees.find((e) => e.id === selectedEmployeeId) || null;
-
-  // When an employee opens "My Profile" (activeSection === 'employees'),
-  // skip the directory grid and open their own profile modal directly.
-  useEffect(() => {
-    if (currentUser && currentUser.role === 'employee' && activeSection === 'employees') {
-      setSelectedEmployeeId(currentUser.employeeId || currentUser.id);
-    }
-  }, [activeSection, currentUser]);
 
   // Real-time calculation for Dashboard Stat Cards
   const totalEmployeesCount = employees.length || 8;
@@ -1967,6 +2098,7 @@ export default function App() {
                   onOpenManualCorrection={handleOpenCorrectionModal}
                   onExportCSV={handleExportCSV}
                   currentUserRole={currentUser.role}
+                  onDeleteRecord={handleDeleteAttendanceRecord}
                 />
               </div>
             )}
@@ -1981,6 +2113,7 @@ export default function App() {
                   onOpenManualCorrection={handleOpenCorrectionModal}
                   onExportCSV={handleExportCSV}
                   currentUserRole={currentUser.role}
+                  onDeleteRecord={handleDeleteAttendanceRecord}
                 />
               </div>
             )}
@@ -2019,46 +2152,44 @@ export default function App() {
                   onApplyLeave={() => setIsLeaveModalOpen(true)}
                   onApproveLeave={(id, comment) => {
                     if (currentUser.role === 'employee') return;
-                    setLeaveRequests((prev) =>
-                      prev.map((l) =>
-                        l.id === id
-                          ? { ...l, status: 'approved', managerComment: comment || l.managerComment }
-                          : l
-                      )
+                    const updatedList = leaveRequests.map((l) =>
+                      l.id === id
+                        ? { ...l, status: 'approved' as const, managerComment: comment || l.managerComment }
+                        : l
                     );
+                    setLeaveRequests(updatedList);
                     api.updateLeaveRequest(id, {
                       status: 'approved',
                       managerComment: comment,
                     }).catch((err) =>
                       console.error('Failed to update approve leave status on server DB:', err)
                     );
+                    const target = leaveRequests.find((l) => l.id === id);
+                    if (target) recomputeEmployeeLeaveUsed(target.employeeId, updatedList);
                     addToast('success', 'Leave Approved', `Leave application ${id} approved.`);
                   }}
                   onRejectLeave={(id, comment) => {
                     if (currentUser.role === 'employee') return;
-                    setLeaveRequests((prev) =>
-                      prev.map((l) =>
-                        l.id === id
-                          ? { ...l, status: 'rejected', managerComment: comment || l.managerComment }
-                          : l
-                      )
+                    const updatedList = leaveRequests.map((l) =>
+                      l.id === id
+                        ? { ...l, status: 'rejected' as const, managerComment: comment || l.managerComment }
+                        : l
                     );
+                    setLeaveRequests(updatedList);
                     api.updateLeaveRequest(id, {
                       status: 'rejected',
                       managerComment: comment,
                     }).catch((err) =>
                       console.error('Failed to update reject leave status on server DB:', err)
                     );
+                    const target = leaveRequests.find((l) => l.id === id);
+                    if (target) recomputeEmployeeLeaveUsed(target.employeeId, updatedList);
                     addToast('warning', 'Leave Rejected', `Leave application ${id} rejected.`);
                   }}
                   onSelectEmployee={(empId) => setSelectedEmployeeId(empId)}
                   onDeleteLeave={(id) => {
                     if (currentUser.role === 'employee') return;
-                    setLeaveRequests((prev) => prev.filter((l) => l.id !== id));
-                    api.deleteLeaveRequest(id).catch((err) =>
-                      console.error('Failed to delete leave request on server DB:', err)
-                    );
-                    addToast('info', 'Leave Application Deleted', `Leave application ${id} has been removed.`);
+                    handleDeleteLeaveRecord(id);
                   }}
                 />
               </div>
@@ -2081,7 +2212,7 @@ export default function App() {
             {/* 6. CALENDAR VIEW */}
             {activeSection === 'calendar' && currentUser.role !== 'employee' && (
               <div className="animate-fade-in">
-                <CalendarView holidays={holidays} leaves={scopedLeaveRequests} />
+                <CalendarView holidays={holidays} leaves={scopedLeaveRequests} onSyncHolidays={handleSyncHolidays} />
               </div>
             )}
 
@@ -2122,7 +2253,9 @@ export default function App() {
                   holidays={holidays}
                   currentUserRole={currentUser.role}
                   onAddHoliday={handleAddHoliday}
+                  onUpdateHoliday={handleUpdateHoliday}
                   onDeleteHoliday={handleDeleteHoliday}
+                  onSyncHolidays={handleSyncHolidays}
                 />
               </div>
             )}
@@ -2255,6 +2388,15 @@ export default function App() {
           onUpdateAvatar={handleUpdateEmployeeAvatar}
           onUpdateLeaveUsed={handleUpdateEmployeeLeaveUsed}
           onUpdateEmployeeProfile={handleUpdateEmployeeProfile}
+          onAddLeaveRecord={
+            currentUser?.role === 'employee' ? undefined : handleAddLeaveRecord
+          }
+          onEditLeaveRecord={
+            currentUser?.role === 'employee' ? undefined : handleEditLeaveRecord
+          }
+          onDeleteLeaveRecord={
+            currentUser?.role === 'employee' ? undefined : handleDeleteLeaveRecord
+          }
           onDeactivateEmployee={async (empId) => {
             await handleDeactivateEmployee(empId);
             setSelectedEmployeeId(null);

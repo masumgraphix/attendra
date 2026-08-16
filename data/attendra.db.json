@@ -68,7 +68,10 @@
       "location": "Mirpur Pallabi",
       "dob": "",
       "nidNumber": "",
-      "designation": "Super Admin"
+      "designation": "Super Admin",
+      "leaveUsed": {
+        "casual": 3
+      }
     },
     {
       "id": "DG-1912",

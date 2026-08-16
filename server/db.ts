@@ -52,6 +52,7 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           salary_deduction_days INT DEFAULT 0,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE employees ADD COLUMN IF NOT EXISTS leave_used JSONB DEFAULT '{}'::jsonb;
         CREATE INDEX IF NOT EXISTS idx_employees_department ON employees(department);
         CREATE INDEX IF NOT EXISTS idx_employees_manager_id ON employees(manager_id);
         CREATE INDEX IF NOT EXISTS idx_employees_status ON employees(status);
@@ -92,6 +93,8 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           approved_by VARCHAR(64),
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
+        ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS employee_name VARCHAR(255);
+        ALTER TABLE leave_requests ADD COLUMN IF NOT EXISTS manager_comment TEXT;
         CREATE INDEX IF NOT EXISTS idx_leave_emp_status ON leave_requests(employee_id, status);
 
         CREATE TABLE IF NOT EXISTS leave_policies (
@@ -102,6 +105,7 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           carry_forward BOOLEAN DEFAULT FALSE,
           max_carry_forward_days INT DEFAULT 0
         );
+        ALTER TABLE leave_policies ADD COLUMN IF NOT EXISTS color_tag VARCHAR(20) DEFAULT 'blue';
 
         CREATE TABLE IF NOT EXISTS announcements (
           id VARCHAR(64) PRIMARY KEY,
@@ -118,6 +122,24 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           title VARCHAR(255) NOT NULL,
           date VARCHAR(20) NOT NULL,
           type VARCHAR(50) DEFAULT 'national'
+        );
+        ALTER TABLE holidays ADD COLUMN IF NOT EXISTS source VARCHAR(20) DEFAULT 'manual';
+        ALTER TABLE holidays ADD COLUMN IF NOT EXISTS external_id VARCHAR(120);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_holidays_external_id ON holidays(external_id) WHERE external_id IS NOT NULL;
+
+        CREATE TABLE IF NOT EXISTS holiday_sync_state (
+          id INT PRIMARY KEY DEFAULT 1,
+          last_synced_at TIMESTAMP,
+          last_result VARCHAR(255)
+        );
+        INSERT INTO holiday_sync_state (id, last_synced_at, last_result)
+        VALUES (1, NULL, 'never synced')
+        ON CONFLICT (id) DO NOTHING;
+
+        CREATE TABLE IF NOT EXISTS holiday_exclusions (
+          external_id VARCHAR(120) PRIMARY KEY,
+          title VARCHAR(255),
+          excluded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
         CREATE TABLE IF NOT EXISTS audit_logs (
@@ -300,6 +322,8 @@ export interface DatabaseSchema {
   registrationRequests: any[];
   passwordResetTokens: any[];
   latePenaltyRule: { threshold: number; deductionDays: number };
+  holidaySyncState?: { lastSyncedAt: string; lastResult: string };
+  holidayExclusions?: string[];
 }
 
 // Initial Seed Data

@@ -12,20 +12,21 @@ import {
   CalendarCheck2,
   Sparkles,
   Download,
+  Landmark,
 } from 'lucide-react';
 
 interface CalendarViewProps {
   holidays: CompanyHoliday[];
   leaves: LeaveRequest[];
   onAddHoliday?: (holiday: Partial<CompanyHoliday>) => void;
+  onSyncHolidays?: () => Promise<void>;
 }
 
-export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves }) => {
+export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves, onSyncHolidays }) => {
   // State for dynamic month and year navigation
-  const [currentDate, setCurrentDate] = useState<Date>(new Date(2026, 7, 1)); // Default Aug 2026
-  const [isGCalSynced, setIsGCalSynced] = useState<boolean>(true);
+  const [currentDate, setCurrentDate] = useState<Date>(new Date());
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
-  const [lastSyncedTime, setLastSyncedTime] = useState<string>('Just Now');
+  const [lastSyncedTime, setLastSyncedTime] = useState<string>('');
   const [selectedDayEvents, setSelectedDayEvents] = useState<{
     dateStr: string;
     holidays: CompanyHoliday[];
@@ -75,16 +76,20 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves }) 
     setCurrentDate(new Date(year, newMonth, 1));
   };
 
-  // Google Calendar Manual Sync Action
-  const handleSyncGCal = () => {
+  // Government Holiday Auto-Sync Action
+  const handleSyncGovHolidays = async () => {
+    if (!onSyncHolidays || isSyncing) return;
     setIsSyncing(true);
-    setTimeout(() => {
-      setIsSyncing(false);
-      setIsGCalSynced(true);
+    try {
+      await onSyncHolidays();
       const timeStr = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
       setLastSyncedTime(`Today at ${timeStr}`);
-    }, 800);
+    } finally {
+      setIsSyncing(false);
+    }
   };
+
+  const isGovernment = (h: CompanyHoliday) => (h.source ?? 'manual') === 'government';
 
   // Helper to construct Google Calendar Direct Add URL
   const getGoogleCalendarUrl = (title: string, startDateStr: string, endDateStr?: string, details?: string) => {
@@ -110,40 +115,38 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves }) 
 
   return (
     <div className="space-y-6">
-      {/* Google Calendar Direct Integration Banner */}
+      {/* Government Holiday Auto-Sync Banner */}
       <div className="bg-gradient-to-r from-blue-900 via-indigo-900 to-slate-900 rounded-3xl p-5 text-white shadow-xl border border-blue-800/50 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <div className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md border border-white/20 flex items-center justify-center shrink-0 shadow-inner">
-            <svg className="w-7 h-7" viewBox="0 0 24 24" fill="none">
-              <rect x="3" y="4" width="18" height="18" rx="3" fill="#4285F4" />
-              <path d="M3 8H21V19C21 20.1 20.1 21 19 21H5C3.9 21 3 20.1 3 19V8Z" fill="#34A853" />
-              <path d="M16 2V6M8 2V6" stroke="white" strokeWidth="2" strokeLinecap="round" />
-              <path d="M12 12V16M10 14H14" stroke="white" strokeWidth="2" strokeLinecap="round" />
-            </svg>
+            <Landmark className="w-6 h-6 text-blue-300" />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <h4 className="text-base font-extrabold tracking-tight">Google Calendar Direct Integration</h4>
+              <h4 className="text-base font-extrabold tracking-tight">Bangladesh Government Holidays — Auto-Sync</h4>
               <span className="px-2.5 py-0.5 text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 rounded-full flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-                Connected
+                Automatic
               </span>
             </div>
             <p className="text-xs text-blue-200/80 mt-0.5">
-              Live bi-directional sync active • All company holidays and approved leave schedules are mapped to Google Calendar
+              Official government holidays are fetched and refreshed automatically • Custom company holidays stay separate
+              {lastSyncedTime && ` • Last synced: ${lastSyncedTime}`}
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            onClick={handleSyncGCal}
-            disabled={isSyncing}
-            className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-blue-900 bg-white hover:bg-blue-50 rounded-2xl transition-all shadow-md cursor-pointer disabled:opacity-60"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Syncing...' : 'Sync Google Calendar'}
-          </button>
+          {onSyncHolidays && (
+            <button
+              onClick={handleSyncGovHolidays}
+              disabled={isSyncing}
+              className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-blue-900 bg-white hover:bg-blue-50 rounded-2xl transition-all shadow-md cursor-pointer disabled:opacity-60"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isSyncing ? 'animate-spin' : ''}`} />
+              {isSyncing ? 'Syncing...' : 'Sync Govt Holidays'}
+            </button>
+          )}
 
           <a
             href="https://calendar.google.com"
@@ -307,10 +310,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves }) 
                         target="_blank"
                         rel="noopener noreferrer"
                         onClick={(e) => e.stopPropagation()}
-                        className="block p-1 rounded-lg bg-amber-100/90 hover:bg-amber-200 text-amber-900 text-[10px] font-extrabold truncate border border-amber-200 transition-colors"
-                        title={`Click to add '${h.title}' to Google Calendar`}
+                        className={`block p-1 rounded-lg text-[10px] font-extrabold truncate border transition-colors ${
+                          isGovernment(h)
+                            ? 'bg-blue-100/90 hover:bg-blue-200 text-blue-900 border-blue-200'
+                            : 'bg-amber-100/90 hover:bg-amber-200 text-amber-900 border-amber-200'
+                        }`}
+                        title={`${isGovernment(h) ? 'Government Holiday (auto-synced)' : 'Custom Holiday (manual)'} — click to add '${h.title}' to Google Calendar`}
                       >
-                        🎉 {h.title}
+                        {isGovernment(h) ? '🏛' : '🎉'} {h.title}
                       </a>
                     ))}
 
@@ -358,11 +365,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({ holidays, leaves }) 
 
             <div className="space-y-3 max-h-80 overflow-y-auto">
               {selectedDayEvents.holidays.map((h) => (
-                <div key={h.id} className="p-3 bg-amber-50 border border-amber-200 rounded-2xl space-y-1">
-                  <span className="text-[10px] font-bold uppercase text-amber-700 bg-amber-100 px-2 py-0.5 rounded-md">
-                    Company Holiday
+                <div key={h.id} className={`p-3 border rounded-2xl space-y-1 ${isGovernment(h) ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+                  <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded-md ${isGovernment(h) ? 'text-blue-700 bg-blue-100' : 'text-amber-700 bg-amber-100'}`}>
+                    {isGovernment(h) ? 'Government Holiday (Auto)' : 'Custom Holiday (Manual)'}
                   </span>
-                  <p className="text-xs font-extrabold text-amber-900">{h.title}</p>
+                  <p className={`text-xs font-extrabold ${isGovernment(h) ? 'text-blue-900' : 'text-amber-900'}`}>{h.title}</p>
                   <a
                     href={getGoogleCalendarUrl(h.title, h.date, h.date, `Official Company Holiday`)}
                     target="_blank"

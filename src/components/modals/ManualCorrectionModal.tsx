@@ -44,7 +44,7 @@ export const ManualCorrectionModal: React.FC<DirectCorrectionModalProps> = ({
       const rec = attendanceRecords.find((r) => r.id === targetId);
       if (rec) {
         setEntryTime(rec.entryTime || '08:30 AM');
-        setExitTime(rec.exitTime || '05:30 PM');
+        setExitTime(rec.exitTime || '');
         setStatus(rec.status || 'present');
         setReason(rec.notes || rec.reason || 'Corrected wrongly entered timestamp/status.');
       }
@@ -59,7 +59,7 @@ export const ManualCorrectionModal: React.FC<DirectCorrectionModalProps> = ({
     const rec = attendanceRecords.find((r) => r.id === recordId);
     if (rec) {
       setEntryTime(rec.entryTime || '08:30 AM');
-      setExitTime(rec.exitTime || '05:30 PM');
+      setExitTime(rec.exitTime || '');
       setStatus(rec.status || 'present');
       setReason(rec.notes || rec.reason || 'Corrected wrongly entered timestamp/status.');
     }
@@ -163,15 +163,17 @@ export const ManualCorrectionModal: React.FC<DirectCorrectionModalProps> = ({
                 />
               </div>
               <div>
-                <label className="font-bold text-slate-700 block mb-1">Corrected Exit Time *</label>
+                <label className="font-bold text-slate-700 block mb-1">Corrected Exit Time</label>
                 <input
                   type="text"
                   value={exitTime}
                   onChange={(e) => setExitTime(e.target.value)}
                   placeholder="e.g. 05:30 PM"
                   className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-mono font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-amber-500/20"
-                  required
                 />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Leave blank to keep the shift active (check-out still pending).
+                </p>
               </div>
             </div>
 

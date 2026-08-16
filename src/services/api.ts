@@ -101,6 +101,7 @@ export const api = {
   getAttendance: () => authFetch<AttendanceRecord[]>('/api/attendance'),
   createAttendance: (rec: AttendanceRecord) => authFetch<AttendanceRecord>('/api/attendance', { method: 'POST', body: JSON.stringify(rec) }),
   updateAttendance: (id: string, rec: Partial<AttendanceRecord>) => authFetch<AttendanceRecord>(`/api/attendance/${id}`, { method: 'PUT', body: JSON.stringify(rec) }),
+  deleteAttendance: (id: string) => authFetch<{ deletedRecord: AttendanceRecord; auditLog: AuditLog }>(`/api/attendance/${id}`, { method: 'DELETE' }),
 
   // Leave Requests
   getLeaveRequests: () => authFetch<LeaveRequest[]>('/api/leave-requests'),
@@ -120,7 +121,9 @@ export const api = {
   // Holidays
   getHolidays: () => authFetch<CompanyHoliday[]>('/api/holidays'),
   createHoliday: (hol: CompanyHoliday) => authFetch<CompanyHoliday>('/api/holidays', { method: 'POST', body: JSON.stringify(hol) }),
+  updateHoliday: (id: string, hol: Partial<CompanyHoliday>) => authFetch<CompanyHoliday>(`/api/holidays/${id}`, { method: 'PUT', body: JSON.stringify(hol) }),
   deleteHoliday: (id: string) => authFetch<{ id: string }>(`/api/holidays/${id}`, { method: 'DELETE' }),
+  syncHolidays: () => authFetch<CompanyHoliday[]>('/api/holidays/sync', { method: 'POST' }),
 
   // Audit Logs
   getAuditLogs: () => authFetch<AuditLog[]>('/api/audit-logs'),

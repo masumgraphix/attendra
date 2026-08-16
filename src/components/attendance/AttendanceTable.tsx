@@ -6,6 +6,7 @@ import {
   Calendar,
   ChevronLeft,
   ChevronRight,
+  Trash2,
 } from 'lucide-react';
 
 interface AttendanceTableProps {
@@ -15,6 +16,7 @@ interface AttendanceTableProps {
   onOpenManualCorrection?: (recordId?: string) => void;
   onExportCSV: () => void;
   currentUserRole?: UserRole;
+  onDeleteRecord?: (recordId: string) => void;
 }
 
 export const AttendanceTable: React.FC<AttendanceTableProps> = ({
@@ -24,6 +26,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
   onOpenManualCorrection,
   onExportCSV,
   currentUserRole,
+  onDeleteRecord,
 }) => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -120,6 +123,19 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
   const availableDepartments: string[] = Array.from(
     new Set<string>(employees.map((e) => e.department).filter(Boolean))
   );
+
+  const canDelete =
+    !!onDeleteRecord && (currentUserRole === 'admin' || currentUserRole === 'super_admin');
+
+  const handleDeleteClick = (recordId: string, employeeName: string, date: string) => {
+    if (
+      window.confirm(
+        `Delete the attendance record for ${employeeName} on ${date}?\n\nThis action is permanent and will be logged in Activity History.`
+      )
+    ) {
+      onDeleteRecord!(recordId);
+    }
+  };
 
   const getStatusBadge = (status: AttendanceStatus | string) => {
     switch (status) {
@@ -268,7 +284,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
         ))}
       </div>
 
-      {/* Table Container - Exactly 7 Columns */}
+      {/* Table Container - 7 columns, plus an Actions column for admins */}
       <div className="overflow-x-auto rounded-2xl border border-slate-200/80">
         <table className="w-full text-left text-xs">
           <thead className="bg-slate-50/80 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200/80 sticky top-0 backdrop-blur-md">
@@ -280,6 +296,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
               <th className="py-3.5 px-4 text-left">Exit Time</th>
               <th className="py-3.5 px-4 text-left">Work Hours</th>
               <th className="py-3.5 px-4 text-left">Status</th>
+              {canDelete && <th className="py-3.5 px-4 text-left">Actions</th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
@@ -363,12 +380,26 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
 
                     {/* 7. Status */}
                     <td className="py-3.5 px-4 whitespace-nowrap">{getStatusBadge(rec.status)}</td>
+
+                    {/* 8. Actions (admins only) */}
+                    {canDelete && (
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <button
+                          type="button"
+                          title="Delete attendance record"
+                          onClick={() => handleDeleteClick(rec.id, employeeName, rec.date)}
+                          className="p-2 rounded-xl text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 );
               })
             ) : (
               <tr>
-                <td colSpan={7} className="py-12 text-center text-slate-500">
+                <td colSpan={canDelete ? 8 : 7} className="py-12 text-center text-slate-500">
                   <p className="font-extrabold text-sm text-slate-800">No attendance records found.</p>
                   <p className="text-xs text-slate-400 mt-1">No matching logs exist for the selected filters.</p>
                 </td>

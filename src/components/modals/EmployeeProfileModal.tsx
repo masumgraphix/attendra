@@ -31,6 +31,7 @@ import {
   UserX,
   Trash2,
   ShieldAlert,
+  Plus,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -67,6 +68,20 @@ interface EmployeeProfileModalProps {
   onUpdateEmployeeProfile?: (employeeId: string, updates: Partial<Employee>) => Promise<void> | void;
   onDeactivateEmployee?: (empId: string) => Promise<void> | void;
   onDeleteEmployee?: (empId: string) => Promise<void> | void;
+  // Leave history management (Admin / Super Admin)
+  onAddLeaveRecord?: (record: {
+    employeeId: string;
+    leaveType: string;
+    startDate: string;
+    endDate: string;
+    totalDays: number;
+    reason: string;
+    status: 'approved' | 'pending' | 'rejected';
+    notes?: string;
+    managerComment?: string;
+  }) => void;
+  onEditLeaveRecord?: (id: string, updates: Partial<LeaveRequest>) => void;
+  onDeleteLeaveRecord?: (id: string) => void;
 }
 
 export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
@@ -91,6 +106,9 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
   onUpdateEmployeeProfile,
   onDeactivateEmployee,
   onDeleteEmployee,
+  onAddLeaveRecord,
+  onEditLeaveRecord,
+  onDeleteLeaveRecord,
 }) => {
   const monthsList = [
     'January', 'February', 'March', 'April', 'May', 'June',
@@ -113,6 +131,18 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
   const [showRemoveModal, setShowRemoveModal] = useState(false);
   const [removeOption, setRemoveOption] = useState<'deactivate' | 'delete'>('deactivate');
   const [isSubmittingRemove, setIsSubmittingRemove] = useState(false);
+
+  // Leave History management state (Admin / Super Admin)
+  const [historyFilter, setHistoryFilter] = useState<'all' | 'approved' | 'pending' | 'rejected'>('all');
+  const [leaveEditorOpen, setLeaveEditorOpen] = useState(false);
+  const [leaveEditorEditId, setLeaveEditorEditId] = useState<string | null>(null);
+  const [leaveEditorType, setLeaveEditorType] = useState('');
+  const [leaveEditorStart, setLeaveEditorStart] = useState('');
+  const [leaveEditorEnd, setLeaveEditorEnd] = useState('');
+  const [leaveEditorStatus, setLeaveEditorStatus] = useState<'approved' | 'pending' | 'rejected'>('approved');
+  const [leaveEditorReason, setLeaveEditorReason] = useState('');
+  const [leaveEditorError, setLeaveEditorError] = useState('');
+  const [leaveDeleteConfirmId, setLeaveDeleteConfirmId] = useState<string | null>(null);
 
   // Personal & Contact Info Edit state
   const [isEditingPersonal, setIsEditingPersonal] = useState(false);
@@ -1102,7 +1132,43 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
 
               {/* Leave History Table */}
               <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-                <h3 className="text-sm font-extrabold text-slate-900">Leave History & Logged Absences</h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <h3 className="text-sm font-extrabold text-slate-900">Leave History & Logged Absences</h3>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {/* Status Filter */}
+                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-2xl border border-slate-200/80">
+                      {(['all', 'approved', 'pending', 'rejected'] as const).map((f) => (
+                        <button
+                          key={f}
+                          onClick={() => setHistoryFilter(f)}
+                          className={`px-2.5 py-1 text-[11px] font-bold rounded-xl transition-all cursor-pointer capitalize ${
+                            historyFilter === f ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          {f}
+                        </button>
+                      ))}
+                    </div>
+                    {isSuperAdmin && onAddLeaveRecord && (
+                      <button
+                        onClick={() => {
+                          setLeaveEditorEditId(null);
+                          setLeaveEditorType(leavePolicies[0]?.id || 'casual');
+                          setLeaveEditorStart(new Date().toISOString().split('T')[0]);
+                          setLeaveEditorEnd(new Date().toISOString().split('T')[0]);
+                          setLeaveEditorStatus('approved');
+                          setLeaveEditorReason('');
+                          setLeaveEditorError('');
+                          setLeaveEditorOpen(true);
+                        }}
+                        className="flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-2xl shadow-md shadow-purple-500/20 transition-all cursor-pointer"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add Leave Record
+                      </button>
+                    )}
+                  </div>
+                </div>
                 <div className="overflow-x-auto rounded-2xl border border-slate-200">
                   <table className="w-full text-left text-xs">
                     <thead className="bg-slate-50 text-slate-500 font-bold uppercase tracking-wider border-b border-slate-200">
@@ -1113,11 +1179,16 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                         <th className="py-3 px-4">Total Days</th>
                         <th className="py-3 px-4">Reason / Notes</th>
                         <th className="py-3 px-4">Status</th>
+                        {isSuperAdmin && (onEditLeaveRecord || onDeleteLeaveRecord) && (
+                          <th className="py-3 px-4 text-right">Actions</th>
+                        )}
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
                       {empLeaves.length > 0 ? (
-                        empLeaves.map((lr) => (
+                        empLeaves
+                          .filter((lr) => historyFilter === 'all' || lr.status === historyFilter)
+                          .map((lr) => (
                           <tr key={lr.id} className="hover:bg-slate-50/80">
                             <td className="py-3 px-4 font-bold capitalize text-slate-900">{lr.leaveType} Leave</td>
                             <td className="py-3 px-4 font-mono">{lr.startDate}</td>
@@ -1125,15 +1196,75 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                             <td className="py-3 px-4 font-bold">{lr.totalDays} days</td>
                             <td className="py-3 px-4">{lr.reason}</td>
                             <td className="py-3 px-4">
-                              <span className="px-2.5 py-1 text-[10px] font-bold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                                Recorded by Admin
+                              <span
+                                className={`px-2.5 py-1 text-[10px] font-bold rounded-full border ${
+                                  lr.status === 'approved'
+                                    ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                    : lr.status === 'pending'
+                                    ? 'bg-amber-50 text-amber-700 border-amber-200'
+                                    : 'bg-rose-50 text-rose-700 border-rose-200'
+                                }`}
+                              >
+                                {lr.status === 'approved' ? 'Approved' : lr.status === 'pending' ? 'Pending' : 'Rejected'}
                               </span>
                             </td>
+                            {isSuperAdmin && (onEditLeaveRecord || onDeleteLeaveRecord) && (
+                              <td className="py-3 px-4">
+                                <div className="flex items-center justify-end gap-1">
+                                  {onEditLeaveRecord && (
+                                    <button
+                                      onClick={() => {
+                                        setLeaveEditorEditId(lr.id);
+                                        setLeaveEditorType(lr.leaveType);
+                                        setLeaveEditorStart(lr.startDate);
+                                        setLeaveEditorEnd(lr.endDate);
+                                        setLeaveEditorStatus(lr.status || 'approved');
+                                        setLeaveEditorReason(lr.reason || '');
+                                        setLeaveEditorError('');
+                                        setLeaveEditorOpen(true);
+                                      }}
+                                      className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all cursor-pointer"
+                                      title="Edit / Correct Leave Record"
+                                    >
+                                      <Edit3 className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                  {onDeleteLeaveRecord &&
+                                    (leaveDeleteConfirmId === lr.id ? (
+                                      <div className="flex items-center gap-1">
+                                        <button
+                                          onClick={() => {
+                                            onDeleteLeaveRecord(lr.id);
+                                            setLeaveDeleteConfirmId(null);
+                                          }}
+                                          className="px-2 py-1 text-[10px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg cursor-pointer"
+                                        >
+                                          Confirm
+                                        </button>
+                                        <button
+                                          onClick={() => setLeaveDeleteConfirmId(null)}
+                                          className="px-2 py-1 text-[10px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => setLeaveDeleteConfirmId(lr.id)}
+                                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition-all cursor-pointer"
+                                        title="Delete Leave Record"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    ))}
+                                </div>
+                              </td>
+                            )}
                           </tr>
-                        ))
+                          ))
                       ) : (
                         <tr>
-                          <td colSpan={6} className="py-6 text-center text-slate-400 italic">No leave history entries logged for this employee.</td>
+                          <td colSpan={7} className="py-6 text-center text-slate-400 italic">No leave history entries logged for this employee.</td>
                         </tr>
                       )}
                     </tbody>
@@ -1447,6 +1578,171 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
           employee={employee}
           onUpdateAvatar={onUpdateAvatar}
         />
+      )}
+
+      {/* Add / Edit Leave Record Modal (Admin & Super Admin) */}
+      {leaveEditorOpen && employee && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-purple-100 text-purple-700">
+                  <Palmtree className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold text-slate-900">
+                    {leaveEditorEditId ? 'Correct Leave Record' : 'Add Leave Record'}
+                  </h3>
+                  <p className="text-[11px] text-slate-500">
+                    {employee.name} • {employee.id}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setLeaveEditorOpen(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!leaveEditorStart || !leaveEditorEnd) return;
+                if (leaveEditorEnd < leaveEditorStart) {
+                  setLeaveEditorError('End date cannot be before the start date.');
+                  return;
+                }
+                const days =
+                  Math.round(
+                    (new Date(leaveEditorEnd).getTime() - new Date(leaveEditorStart).getTime()) / 86400000
+                  ) + 1;
+                if (leaveEditorEditId && onEditLeaveRecord) {
+                  onEditLeaveRecord(leaveEditorEditId, {
+                    leaveType: leaveEditorType,
+                    startDate: leaveEditorStart,
+                    endDate: leaveEditorEnd,
+                    totalDays: days,
+                    reason: leaveEditorReason,
+                    status: leaveEditorStatus,
+                  });
+                } else if (!leaveEditorEditId && onAddLeaveRecord) {
+                  onAddLeaveRecord({
+                    employeeId: employee.id,
+                    leaveType: leaveEditorType,
+                    startDate: leaveEditorStart,
+                    endDate: leaveEditorEnd,
+                    totalDays: days,
+                    reason: leaveEditorReason,
+                    status: leaveEditorStatus,
+                  });
+                }
+                setLeaveEditorOpen(false);
+              }}
+              className="space-y-4"
+            >
+              {leaveEditorError && (
+                <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-2xl text-xs text-rose-800 font-semibold">
+                  {leaveEditorError}
+                </div>
+              )}
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Leave Type *</label>
+                <select
+                  value={leaveEditorType}
+                  onChange={(e) => setLeaveEditorType(e.target.value)}
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 capitalize"
+                  required
+                >
+                  {leavePolicies.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} (Quota: {p.yearlyQuota}d/yr)
+                    </option>
+                  ))}
+                  <option value="unpaid">Unpaid Leave</option>
+                </select>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">Start Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={leaveEditorStart}
+                    onChange={(e) => setLeaveEditorStart(e.target.value)}
+                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-700 block mb-1">End Date *</label>
+                  <input
+                    type="date"
+                    required
+                    value={leaveEditorEnd}
+                    onChange={(e) => setLeaveEditorEnd(e.target.value)}
+                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2">
+                <span className="text-[11px] font-bold text-slate-500">Calculated Duration:</span>
+                <span className="text-xs font-black text-slate-900">
+                  {leaveEditorStart && leaveEditorEnd && leaveEditorEnd >= leaveEditorStart
+                    ? `${
+                        Math.round(
+                          (new Date(leaveEditorEnd).getTime() - new Date(leaveEditorStart).getTime()) / 86400000
+                        ) + 1
+                      } day(s)`
+                    : '—'}
+                </span>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Status *</label>
+                <select
+                  value={leaveEditorStatus}
+                  onChange={(e) => setLeaveEditorStatus(e.target.value as 'approved' | 'pending' | 'rejected')}
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                >
+                  <option value="approved">Approved (counts toward balance)</option>
+                  <option value="pending">Pending</option>
+                  <option value="rejected">Rejected</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Reason</label>
+                <input
+                  type="text"
+                  value={leaveEditorReason}
+                  onChange={(e) => setLeaveEditorReason(e.target.value)}
+                  placeholder="e.g. Medical treatment, family event, correction..."
+                  className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800"
+                />
+              </div>
+
+              <div className="pt-3 flex items-center justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setLeaveEditorOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-md shadow-purple-500/20"
+                >
+                  {leaveEditorEditId ? 'Save Correction' : 'Save Record'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
 
       {/* Remove / Deactivate Employee Modal */}

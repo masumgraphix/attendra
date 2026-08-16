@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, Clock, MapPin, Save, Palmtree, Plus, Trash2, AlertTriangle, X, Check, Lock, ShieldCheck, Users, DollarSign, HelpCircle, RotateCcw, KeyRound } from 'lucide-react';
 import { LeavePolicy, Employee, UserAccount, UserRole, RegistrationRequest, OfficeShiftSettings } from '../../types';
 import { LatePenaltyRule } from '../../utils/salaryDeduction';
@@ -83,7 +83,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [penaltyDeductionDays, setPenaltyDeductionDays] = useState<number>(latePenaltyRule?.deductionDays ?? 1);
 
   // Leave Policies Local State
-  const [policies, setPolicies] = useState<LeavePolicy[]>(leavePolicies);
+  const [policies, setPolicies] = useState<LeavePolicy[]>(leavePolicies ?? []);
+
+  // Re-sync when server data arrives after this component mounted; otherwise
+  // edits made during the async load get overwritten by stale local state.
+  useEffect(() => {
+    setPolicies(leavePolicies ?? []);
+  }, [leavePolicies]);
 
   // Delete Confirmation Modal State
   const [deleteWarningModal, setDeleteWarningModal] = useState<{
@@ -99,30 +105,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   });
 
   const isSuperAdmin = currentUserRole === 'super_admin';
+  // Leave policies are managed by Admin AND Super Admin; the remaining
+  // governance settings (shift rules, accounts) stay Super Admin only.
+  const canEditPolicies = currentUserRole === 'super_admin' || currentUserRole === 'admin';
 
   const handleQuotaChange = (id: string, newQuota: number) => {
-    if (!isSuperAdmin) return;
+    if (!canEditPolicies) return;
     setPolicies((prev) =>
       prev.map((p) => (p.id === id ? { ...p, yearlyQuota: Math.max(0, newQuota) } : p))
     );
   };
 
   const handleNameChange = (id: string, newName: string) => {
-    if (!isSuperAdmin) return;
+    if (!canEditPolicies) return;
     setPolicies((prev) =>
       prev.map((p) => (p.id === id ? { ...p, name: newName } : p))
     );
   };
 
   const handleColorChange = (id: string, newColor: string) => {
-    if (!isSuperAdmin) return;
+    if (!canEditPolicies) return;
     setPolicies((prev) =>
       prev.map((p) => (p.id === id ? { ...p, colorTag: newColor } : p))
     );
   };
 
   const handleAddPolicy = () => {
-    if (!isSuperAdmin) return;
+    if (!canEditPolicies) return;
     const newId = `leave_type_${Date.now()}`;
     const newPolicy: LeavePolicy = {
       id: newId,
@@ -134,7 +143,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleInitiateDelete = (policy: LeavePolicy) => {
-    if (!isSuperAdmin) return;
+    if (!canEditPolicies) return;
     const affectedEmps = employees.filter((emp) => {
       const used = emp.leaveUsed?.[policy.id] || 0;
       return used > 0;
@@ -153,11 +162,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   const handleConfirmDelete = () => {
-    if (deleteWarningModal.policy && isSuperAdmin) {
+    if (deleteWarningModal.policy && canEditPolicies) {
       const targetId = deleteWarningModal.policy.id;
       setPolicies((prev) => prev.filter((p) => p.id !== targetId));
     }
     setDeleteWarningModal({ isOpen: false, policy: null, affectedCount: 0, affectedNames: [] });
+  };
+
+  // Saves only the leave policy section — available to Admin and Super Admin.
+  const handleSavePolicies = () => {
+    if (!canEditPolicies) return;
+    onSaveSettings(policies);
   };
 
   const handleSaveAll = () => {
@@ -509,7 +524,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </p>
             </div>
 
-            {isSuperAdmin && (
+            {canEditPolicies && (
               <button
                 type="button"
                 onClick={handleAddPolicy}
@@ -534,7 +549,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   {/* Name & Badge Preview */}
                   <div className="flex items-center gap-3 flex-1 min-w-[200px]">
                     <div className="relative">
-                      {isSuperAdmin && (
+                      {canEditPolicies && (
                         <select
                           value={policy.colorTag}
                           onChange={(e) => handleColorChange(policy.id, e.target.value)}
@@ -550,7 +565,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       )}
                       <div
                         className={`w-7 h-7 rounded-xl ${colorMeta.bg} text-white flex items-center justify-center font-bold text-xs shadow-xs ${
-                          isSuperAdmin ? 'cursor-pointer ring-2 ring-white' : ''
+                          canEditPolicies ? 'cursor-pointer ring-2 ring-white' : ''
                         }`}
                         title="Color Badge Tag"
                       >
@@ -560,7 +575,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                     <input
                       type="text"
-                      disabled={!isSuperAdmin}
+                      disabled={!canEditPolicies}
                       value={policy.name}
                       onChange={(e) => handleNameChange(policy.id, e.target.value)}
                       className="flex-1 px-3 py-1.5 text-xs font-extrabold text-slate-900 bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-purple-500/20 disabled:opacity-85"
@@ -574,7 +589,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <span className="text-[11px] font-bold text-slate-500">Yearly Quota:</span>
                       <input
                         type="number"
-                        disabled={!isSuperAdmin}
+                        disabled={!canEditPolicies}
                         min={0}
                         value={policy.yearlyQuota}
                         onChange={(e) => handleQuotaChange(policy.id, parseInt(e.target.value, 10) || 0)}
@@ -583,7 +598,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       <span className="text-[11px] font-bold text-slate-500">days/yr</span>
                     </div>
 
-                    {isSuperAdmin && (
+                    {canEditPolicies && (
                       <button
                         type="button"
                         onClick={() => handleInitiateDelete(policy)}
@@ -600,12 +615,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           {/* Save Footer inside Card */}
-          {isSuperAdmin && (
+          {canEditPolicies && (
             <div className="pt-2 flex items-center justify-between text-xs text-slate-500">
               <span>Active categories: <strong className="text-slate-800">{policies.length}</strong></span>
               <button
                 type="button"
-                onClick={handleSaveAll}
+                onClick={handleSavePolicies}
                 className="flex items-center gap-1.5 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl shadow-sm transition-all cursor-pointer"
               >
                 <Check className="w-4 h-4" />

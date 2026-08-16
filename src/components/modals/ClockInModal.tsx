@@ -27,7 +27,7 @@ export const ClockInModal: React.FC<DirectAttendanceModalProps> = ({
   const [selectedEmpId, setSelectedEmpId] = useState(employees[0]?.id || '');
   const [date, setDate] = useState('2026-07-29');
   const [entryTime, setEntryTime] = useState('08:30 AM');
-  const [exitTime, setExitTime] = useState('05:30 PM');
+  const [exitTime, setExitTime] = useState('');
   const [status, setStatus] = useState<AttendanceStatus>('present');
   const [locationType, setLocationType] = useState<
     'Office HQ' | 'Remote - Home' | 'Client Site' | 'Geofence App' | 'Official Tour'
@@ -148,6 +148,9 @@ export const ClockInModal: React.FC<DirectAttendanceModalProps> = ({
                 placeholder="e.g. 05:30 PM"
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-2xl font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
               />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Leave blank if the employee has not checked out yet — they can check out later from their Dashboard.
+              </p>
             </div>
           </div>
 

@@ -177,6 +177,10 @@ export interface CompanyHoliday {
   dayOfWeek: string;
   type: 'national' | 'company' | 'religious' | 'corporate' | 'optional';
   appliesTo: string;
+  /** 'government' = auto-synced from official BD sources; 'manual' = added by an admin. Defaults to 'manual'. */
+  source?: 'government' | 'manual';
+  /** Stable sync key for government holidays (one per date). */
+  externalId?: string;
 }
 
 export interface AuditLog {
