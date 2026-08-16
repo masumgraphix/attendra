@@ -12,6 +12,9 @@ export const JWT_SECRET = process.env.JWT_SECRET || 'attendra_saas_jwt_secret_20
 let pgPool: pg.Pool | null = null;
 let pgInitPromise: Promise<void> | null = null;
 
+// Cluster-wide advisory lock id used to serialize first-time schema creation.
+const ATTENDRA_SCHEMA_LOCK_ID = 918273645;
+
 export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
   const pool = poolOverride || getPgPool();
   if (!pool) return;
@@ -20,7 +23,24 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
 
   pgInitPromise = (async () => {
     try {
-      await pool.query(`
+      // Skip all DDL when the schema already exists: on serverless, every
+      // concurrent cold start would otherwise run CREATE/ALTER in parallel,
+      // which deadlocks on Neon (AccessExclusiveLock) and silently drops the
+      // whole request burst onto the JSON fallback store.
+      const schemaCheck = await pool.query(
+        `SELECT to_regclass('public.attendance') IS NOT NULL AS schema_exists`
+      );
+      if (!schemaCheck.rows[0] || !schemaCheck.rows[0].schema_exists) {
+        const client = await pool.connect();
+        try {
+          await client.query(`SET statement_timeout = '30s'`);
+          await client.query(`SELECT pg_advisory_lock($1)`, [ATTENDRA_SCHEMA_LOCK_ID]);
+          try {
+            const recheck = await client.query(
+              `SELECT to_regclass('public.attendance') IS NOT NULL AS schema_exists`
+            );
+            if (!recheck.rows[0] || !recheck.rows[0].schema_exists) {
+              await client.query(`
         CREATE TABLE IF NOT EXISTS users (
           id VARCHAR(64) PRIMARY KEY,
           email VARCHAR(255) UNIQUE NOT NULL,
@@ -219,7 +239,18 @@ export const initPgDatabase = async (poolOverride?: pg.Pool): Promise<void> => {
           color VARCHAR(50) DEFAULT '#2563EB',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-      `);
+              `);
+            }
+          } finally {
+            await client
+              .query(`SELECT pg_advisory_unlock($1)`, [ATTENDRA_SCHEMA_LOCK_ID])
+              .catch(() => {});
+          }
+        } finally {
+          await client.query(`RESET statement_timeout`).catch(() => {});
+          client.release();
+        }
+      }
 
       const userCheck = await pool.query(`SELECT COUNT(*) FROM users`);
       if (parseInt(userCheck.rows[0].count, 10) === 0) {
