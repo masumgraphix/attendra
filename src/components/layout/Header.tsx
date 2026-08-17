@@ -253,14 +253,17 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right Controls */}
       <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
-        {/* Record Attendance Action Button */}
-        <button
-          onClick={onOpenClockInModal}
-          className="flex items-center gap-2 px-2.5 sm:px-3.5 py-2 rounded-2xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
-        >
-          <UserCheck className="w-4 h-4 stroke-[2.2]" />
-          <span className="hidden sm:inline">{isEmployee ? 'Punch Attendance' : 'Record Attendance'}</span>
-        </button>
+        {/* Record Attendance Action Button — employees punch via the
+            Dashboard check-in widget instead, so this stays admin-only. */}
+        {!isEmployee && (
+          <button
+            onClick={onOpenClockInModal}
+            className="flex items-center gap-2 px-2.5 sm:px-3.5 py-2 rounded-2xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 shadow-md shadow-blue-500/20 transition-all cursor-pointer"
+          >
+            <UserCheck className="w-4 h-4 stroke-[2.2]" />
+            <span className="hidden sm:inline">Record Attendance</span>
+          </button>
+        )}
 
         {/* AI Workforce Insights Trigger (For Admin & Super Admin) */}
         {!isEmployee && (
