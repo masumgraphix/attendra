@@ -2148,6 +2148,7 @@ export default function App() {
               <div className="animate-fade-in">
                 <LeaveManagement
                   leaveRequests={scopedLeaveRequests}
+                  leavePolicies={leavePolicies}
                   currentUserRole={currentUser.role}
                   onApplyLeave={() => setIsLeaveModalOpen(true)}
                   onApproveLeave={(id, comment) => {

@@ -18,7 +18,7 @@ dotenv.config({ path: ".env.local" });
 dotenv.config({ path: ".env" });
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.text({ limit: '50mb', type: ['text/csv', 'text/plain'] }));
@@ -1436,7 +1436,17 @@ app.get("/api/leave-policies", authenticateToken, async (req, res) => {
     } catch (err) { console.error("PG LeavePolicies error:", err); }
   }
   const db = await getDb();
-  res.json({ success: true, data: db.data.leavePolicies });
+  // JSON-mode docs may only carry totalDays (older writes); expose the same
+  // yearlyQuota/colorTag contract as the PG branch so the client never sees
+  // undefined quotas.
+  res.json({
+    success: true,
+    data: db.data.leavePolicies.map((lp: any) => ({
+      ...lp,
+      yearlyQuota: lp.yearlyQuota ?? lp.totalDays ?? 10,
+      colorTag: lp.colorTag || "blue",
+    })),
+  });
 });
 
 app.put("/api/leave-policies", authenticateToken, async (req, res) => {
@@ -1473,7 +1483,12 @@ app.put("/api/leave-policies", authenticateToken, async (req, res) => {
   }
   const db = await getDb();
   if (Array.isArray(req.body)) {
-    db.data.leavePolicies = req.body;
+    // Keep totalDays in sync with the client's yearlyQuota so JSON-mode reads
+    // stay self-consistent.
+    db.data.leavePolicies = req.body.map((lp: any) => ({
+      ...lp,
+      totalDays: lp.yearlyQuota ?? lp.totalDays ?? 10,
+    }));
     await db.write();
   }
   res.json({ success: true, data: db.data.leavePolicies });

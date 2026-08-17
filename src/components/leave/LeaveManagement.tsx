@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LeaveRequest, UserRole } from '../../types';
+import { LeaveRequest, UserRole, LeavePolicy } from '../../types';
 import {
   CalendarDays,
   Plus,
@@ -14,8 +14,21 @@ import {
 } from 'lucide-react';
 import { LeaveDetailModal } from '../modals/LeaveDetailModal';
 
+// Card accent per policy colorTag (same ids as SettingsView COLOR_OPTIONS).
+const POLICY_CARD_COLORS: Record<string, { iconBg: string; accent: string }> = {
+  emerald: { iconBg: 'bg-emerald-600 text-white', accent: 'border-emerald-200' },
+  purple: { iconBg: 'bg-purple-600 text-white', accent: 'border-purple-200' },
+  amber: { iconBg: 'bg-amber-500 text-white', accent: 'border-amber-200' },
+  blue: { iconBg: 'bg-blue-600 text-white', accent: 'border-blue-200' },
+  rose: { iconBg: 'bg-rose-600 text-white', accent: 'border-rose-200' },
+  indigo: { iconBg: 'bg-indigo-600 text-white', accent: 'border-indigo-200' },
+  teal: { iconBg: 'bg-teal-600 text-white', accent: 'border-teal-200' },
+  slate: { iconBg: 'bg-slate-600 text-white', accent: 'border-slate-200' },
+};
+
 interface LeaveManagementProps {
   leaveRequests: LeaveRequest[];
+  leavePolicies?: LeavePolicy[];
   currentUserRole?: UserRole;
   onApplyLeave: () => void;
   onApproveLeave: (id: string, comment?: string) => void;
@@ -26,6 +39,7 @@ interface LeaveManagementProps {
 
 export const LeaveManagement: React.FC<LeaveManagementProps> = ({
   leaveRequests,
+  leavePolicies = [],
   currentUserRole = 'super_admin',
   onApplyLeave,
   onApproveLeave,
@@ -78,27 +92,38 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
 
   return (
     <div className="space-y-6">
-      {/* Top Leave Overview Balances */}
+      {/* Top Leave Overview Balances — quota cards render straight from the
+          live leave policies, so quota changes applied in Settings → Leave
+          Policy reflect here immediately. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[
-          { title: 'Annual Paid Leave Pool', total: '24 Days / yr', iconBg: 'bg-blue-600 text-white', accent: 'border-blue-200' },
-          { title: 'Sick & Wellness Reserve', total: '12 Days / yr', iconBg: 'bg-emerald-600 text-white', accent: 'border-emerald-200' },
-          { title: 'Casual & Personal Days', total: '6 Days / yr', iconBg: 'bg-purple-600 text-white', accent: 'border-purple-200' },
-          { title: 'Total Company Absences', total: `${leaveRequests.length} Recorded`, iconBg: 'bg-amber-500 text-white', accent: 'border-amber-200' },
-        ].map((card, i) => (
-          <div
-            key={i}
-            className={`bg-white/90 backdrop-blur-xl border ${card.accent} rounded-3xl p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] flex items-center justify-between`}
-          >
-            <div>
-              <p className="text-xs font-semibold text-slate-500">{card.title}</p>
-              <p className="text-xl font-extrabold text-slate-900 mt-1">{card.total}</p>
+        {leavePolicies.map((policy) => {
+          const color = POLICY_CARD_COLORS[policy.colorTag] || POLICY_CARD_COLORS.blue;
+          return (
+            <div
+              key={policy.id}
+              className={`bg-white/90 backdrop-blur-xl border ${color.accent} rounded-3xl p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] flex items-center justify-between`}
+            >
+              <div>
+                <p className="text-xs font-semibold text-slate-500">{policy.name}</p>
+                <p className="text-xl font-extrabold text-slate-900 mt-1">{policy.yearlyQuota} Days / yr</p>
+              </div>
+              <div className={`p-3 rounded-2xl ${color.iconBg} shadow-md`}>
+                <CalendarDays className="w-5 h-5 stroke-[2.2]" />
+              </div>
             </div>
-            <div className={`p-3 rounded-2xl ${card.iconBg} shadow-md`}>
-              <CalendarDays className="w-5 h-5 stroke-[2.2]" />
-            </div>
+          );
+        })}
+        <div
+          className="bg-white/90 backdrop-blur-xl border border-amber-200 rounded-3xl p-5 shadow-[0_4px_20px_rgb(0,0,0,0.03)] flex items-center justify-between"
+        >
+          <div>
+            <p className="text-xs font-semibold text-slate-500">Total Company Absences</p>
+            <p className="text-xl font-extrabold text-slate-900 mt-1">{leaveRequests.length} Recorded</p>
           </div>
-        ))}
+          <div className="p-3 rounded-2xl bg-amber-500 text-white shadow-md">
+            <CalendarDays className="w-5 h-5 stroke-[2.2]" />
+          </div>
+        </div>
       </div>
 
       {/* Main Leave Workflow Section */}
