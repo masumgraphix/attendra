@@ -198,6 +198,10 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
 
   const isSuperAdmin = currentUserRole === 'super_admin' || currentUserRole === 'admin';
 
+  // Leave quota adjustments are Admin/Super Admin only. Employees always see
+  // a read-only balance view, even on their own profile.
+  const canAdjustQuota = isSuperAdmin && Boolean(onUpdateLeaveUsed);
+
   const handleSaveEmployment = async () => {
     if (!employee || !onUpdateEmployeeProfile) return;
     setIsSavingEmployment(true);
@@ -728,7 +732,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                     <div>
                       <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2">
                         <Palmtree className="w-4.5 h-4.5 text-purple-600" />
-                        Annual Leave Balances & Manual Quota Adjustments
+                        Annual Leave Balances{canAdjustQuota ? ' & Manual Quota Adjustments' : ''}
                       </h3>
                       <p className="text-[11px] text-slate-500 mt-0.5">
                         Yearly quotas are configured in Settings. Remaining balance is derived dynamically (Quota - Used).
@@ -780,7 +784,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                               {policy.name}
                             </span>
 
-                            {!isEditing ? (
+                            {canAdjustQuota && (!isEditing ? (
                               <button
                                 type="button"
                                 onClick={() => {
@@ -816,7 +820,7 @@ export const EmployeeProfileModal: React.FC<EmployeeProfileModalProps> = ({
                                   <X className="w-3 h-3" />
                                 </button>
                               </div>
-                            )}
+                            ))}
                           </div>
 
                           {/* Stat Breakdown */}

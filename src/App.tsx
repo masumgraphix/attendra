@@ -2387,7 +2387,9 @@ export default function App() {
             }
           }}
           onUpdateAvatar={handleUpdateEmployeeAvatar}
-          onUpdateLeaveUsed={handleUpdateEmployeeLeaveUsed}
+          onUpdateLeaveUsed={
+            currentUser?.role === 'employee' ? undefined : handleUpdateEmployeeLeaveUsed
+          }
           onUpdateEmployeeProfile={handleUpdateEmployeeProfile}
           onAddLeaveRecord={
             currentUser?.role === 'employee' ? undefined : handleAddLeaveRecord

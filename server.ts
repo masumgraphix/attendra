@@ -639,10 +639,48 @@ app.post("/api/employees", authenticateToken, async (req, res) => {
   res.json({ success: true, data: fullEmp });
 });
 
-app.put("/api/employees/:id", authenticateToken, async (req, res) => {
+app.put("/api/employees/:id", authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   const updates = req.body;
   const pool = getPgPool();
+
+  // Employees may only update their own profile's personal contact fields.
+  // Leave quotas (leaveUsed/leaveBalance) and employment data are
+  // Admin/Super Admin only — enforced here so a hidden button in the UI is
+  // not the only barrier against direct API calls with an employee JWT.
+  if (req.user?.role === 'employee') {
+    const EMPLOYEE_EDITABLE_FIELDS = ['avatar', 'phone', 'email', 'address', 'bloodGroup', 'dob', 'nidNumber', 'location'];
+    const hasForbiddenField = Object.keys(updates || {}).some(
+      (k) => !EMPLOYEE_EDITABLE_FIELDS.includes(k)
+    );
+
+    let ownEmployeeId: string | null = null;
+    if (pool) {
+      try {
+        const accRes = await pool.query(
+          `SELECT id, employee_id as "employeeId" FROM users WHERE id = $1`,
+          [req.user.id]
+        );
+        if (accRes.rows.length > 0) {
+          ownEmployeeId = accRes.rows[0].employeeId || accRes.rows[0].id;
+        }
+      } catch (err) {
+        console.error("PG employee ownership check error:", err);
+      }
+    }
+    if (!ownEmployeeId) {
+      const db = await getDb();
+      const acc = (db.data.userAccounts || []).find((a: any) => a.id === req.user.id);
+      if (acc) ownEmployeeId = acc.employeeId || acc.id;
+    }
+
+    if (hasForbiddenField || ownEmployeeId !== id) {
+      return res.status(403).json({
+        success: false,
+        message: "Employees can only update their own profile contact details. Leave quota adjustments require Admin or Super Admin.",
+      });
+    }
+  }
 
   if (pool) {
     try {

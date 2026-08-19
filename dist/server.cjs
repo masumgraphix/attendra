@@ -51,13 +51,30 @@ var { Pool } = import_pg.default;
 var JWT_SECRET = process.env.JWT_SECRET || "attendra_saas_jwt_secret_2026_key";
 var pgPool = null;
 var pgInitPromise = null;
+var ATTENDRA_SCHEMA_LOCK_ID = 918273645;
+var ATTENDRA_SCHEMA_VERSION = 2;
 var initPgDatabase = async (poolOverride) => {
   const pool = poolOverride || getPgPool();
   if (!pool) return;
   if (pgInitPromise) return pgInitPromise;
   pgInitPromise = (async () => {
     try {
-      await pool.query(`
+      const readSchemaVersion = async (q) => {
+        try {
+          const v = await q.query(`SELECT version FROM attendra_schema_meta WHERE id = 1`);
+          return parseInt(v.rows[0]?.version, 10) || 0;
+        } catch {
+          return 0;
+        }
+      };
+      if (await readSchemaVersion(pool) < ATTENDRA_SCHEMA_VERSION) {
+        const client = await pool.connect();
+        try {
+          await client.query(`SET statement_timeout = '60s'`);
+          await client.query(`SELECT pg_advisory_lock($1)`, [ATTENDRA_SCHEMA_LOCK_ID]);
+          try {
+            if (await readSchemaVersion(client) < ATTENDRA_SCHEMA_VERSION) {
+              await client.query(`
         CREATE TABLE IF NOT EXISTS users (
           id VARCHAR(64) PRIMARY KEY,
           email VARCHAR(255) UNIQUE NOT NULL,
@@ -256,7 +273,25 @@ var initPgDatabase = async (poolOverride) => {
           color VARCHAR(50) DEFAULT '#2563EB',
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-      `);
+
+        CREATE TABLE IF NOT EXISTS attendra_schema_meta (
+          id INT PRIMARY KEY,
+          version INT NOT NULL
+        );
+        INSERT INTO attendra_schema_meta (id, version) VALUES (1, ${ATTENDRA_SCHEMA_VERSION})
+        ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version;
+              `);
+            }
+          } finally {
+            await client.query(`SELECT pg_advisory_unlock($1)`, [ATTENDRA_SCHEMA_LOCK_ID]).catch(() => {
+            });
+          }
+        } finally {
+          await client.query(`RESET statement_timeout`).catch(() => {
+          });
+          client.release();
+        }
+      }
       const userCheck = await pool.query(`SELECT COUNT(*) FROM users`);
       if (parseInt(userCheck.rows[0].count, 10) === 0) {
         console.log("\u{1F331} Auto-seeding PostgreSQL database tables with initial accounts...");
@@ -740,7 +775,7 @@ var CURATED_BD_HOLIDAYS = [
 import_dotenv.default.config({ path: ".env.local" });
 import_dotenv.default.config({ path: ".env" });
 var app = (0, import_express.default)();
-var PORT = 3e3;
+var PORT = Number(process.env.PORT) || 3e3;
 app.use(import_express.default.json({ limit: "50mb" }));
 app.use(import_express.default.text({ limit: "50mb", type: ["text/csv", "text/plain"] }));
 var getAIClient = () => {
@@ -1261,6 +1296,37 @@ app.put("/api/employees/:id", authenticateToken, async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
   const pool = getPgPool();
+  if (req.user?.role === "employee") {
+    const EMPLOYEE_EDITABLE_FIELDS = ["avatar", "phone", "email", "address", "bloodGroup", "dob", "nidNumber", "location"];
+    const hasForbiddenField = Object.keys(updates || {}).some(
+      (k) => !EMPLOYEE_EDITABLE_FIELDS.includes(k)
+    );
+    let ownEmployeeId = null;
+    if (pool) {
+      try {
+        const accRes = await pool.query(
+          `SELECT id, employee_id as "employeeId" FROM users WHERE id = $1`,
+          [req.user.id]
+        );
+        if (accRes.rows.length > 0) {
+          ownEmployeeId = accRes.rows[0].employeeId || accRes.rows[0].id;
+        }
+      } catch (err) {
+        console.error("PG employee ownership check error:", err);
+      }
+    }
+    if (!ownEmployeeId) {
+      const db2 = await getDb();
+      const acc = (db2.data.userAccounts || []).find((a) => a.id === req.user.id);
+      if (acc) ownEmployeeId = acc.employeeId || acc.id;
+    }
+    if (hasForbiddenField || ownEmployeeId !== id) {
+      return res.status(403).json({
+        success: false,
+        message: "Employees can only update their own profile contact details. Leave quota adjustments require Admin or Super Admin."
+      });
+    }
+  }
   if (pool) {
     try {
       await initPgDatabase(pool);
@@ -1969,7 +2035,14 @@ app.get("/api/leave-policies", authenticateToken, async (req, res) => {
     }
   }
   const db = await getDb();
-  res.json({ success: true, data: db.data.leavePolicies });
+  res.json({
+    success: true,
+    data: db.data.leavePolicies.map((lp) => ({
+      ...lp,
+      yearlyQuota: lp.yearlyQuota ?? lp.totalDays ?? 10,
+      colorTag: lp.colorTag || "blue"
+    }))
+  });
 });
 app.put("/api/leave-policies", authenticateToken, async (req, res) => {
   if (!requireAdminRole(req, res)) return;
@@ -2003,7 +2076,10 @@ app.put("/api/leave-policies", authenticateToken, async (req, res) => {
   }
   const db = await getDb();
   if (Array.isArray(req.body)) {
-    db.data.leavePolicies = req.body;
+    db.data.leavePolicies = req.body.map((lp) => ({
+      ...lp,
+      totalDays: lp.yearlyQuota ?? lp.totalDays ?? 10
+    }));
     await db.write();
   }
   res.json({ success: true, data: db.data.leavePolicies });
