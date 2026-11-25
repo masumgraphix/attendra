@@ -59,7 +59,7 @@ export const LeaveManagement: React.FC<LeaveManagementProps> = ({
     const matchesSearch =
       (r.employeeName || '').toLowerCase().includes(s) ||
       (r.department || '').toLowerCase().includes(s) ||
-      (r.leaveType || r.type || '').toLowerCase().includes(s) ||
+      (r.leaveType || '').toLowerCase().includes(s) ||
       (r.reason || '').toLowerCase().includes(s);
     const matchesStatus = filterStatus === 'all' || r.status === filterStatus;
     return matchesSearch && matchesStatus;

@@ -1,4 +1,5 @@
 import React from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import { NavSection, UserAccount, UserRole } from '../../types';
 import {
   LayoutDashboard,
@@ -31,6 +32,7 @@ interface SidebarProps {
   // off-canvas behavior below the lg breakpoint.
   isMobileOpen?: boolean;
   onMobileClose?: () => void;
+  companyName?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -41,6 +43,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLogout,
   isMobileOpen = false,
   onMobileClose,
+  companyName,
 }) => {
   const role = currentUser.role;
 
@@ -130,11 +133,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div>
                 <div className="flex items-center gap-1.5">
                   <h1 className="font-extrabold text-lg text-slate-900 tracking-tight">Attendra</h1>
-                  <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-700 rounded-md">
-                    Pro
-                  </span>
                 </div>
-                <p className="text-[11px] font-medium text-slate-600">Enterprise HR Suite</p>
+                <p className="text-[11px] font-semibold text-slate-600 truncate max-w-[150px]" title={companyName}>{companyName || 'HR Suite'}</p>
               </div>
             </div>
             {/* Close button — only ever visible on mobile since the drawer
@@ -198,7 +198,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-50 to-blue-50/50 border border-slate-200/80 flex items-center justify-between">
             <div className="flex items-center gap-2.5 truncate">
               <img
-                src={currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                src={currentUser.avatar || DEFAULT_AVATAR}
                 alt={currentUser.name}
                 className="w-8 h-8 rounded-full object-cover ring-2 ring-blue-500/30 shrink-0"
               />

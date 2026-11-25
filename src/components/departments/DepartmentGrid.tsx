@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import { Department, Employee, AttendanceRecord, UserRole } from '../../types';
 import { Building2, Plus, Trash2, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { AddDepartmentModal } from '../modals/AddDepartmentModal';
@@ -91,7 +92,7 @@ export const DepartmentGrid: React.FC<DepartmentGridProps> = ({
       // unless the department itself is brand new with no employees ever assigned.
       headName = 'Unassigned';
       headAvatar =
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200';
+        DEFAULT_AVATAR;
     }
 
     // 3. Real attendance records for this department

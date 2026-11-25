@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { generateTempPassword } from '../../utils/id';
 import { createPortal } from 'react-dom';
 import { RegistrationRequest } from '../../types';
 import { UserPlus, Check, X, Clock, Mail, IdCard, ShieldCheck, Sparkles, Send, Lock } from 'lucide-react';
@@ -27,13 +28,7 @@ export const PendingJoinRequestsCard: React.FC<PendingJoinRequestsCardProps> = (
   const [emailResult, setEmailResult] = useState<{ emailSent: boolean; emailSimulated: boolean } | null>(null);
 
   const handleOpenApproveModal = (req: RegistrationRequest) => {
-    // Generate random strong password: Pass-XXXXXX#
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$';
-    let rand = '';
-    for (let i = 0; i < 6; i++) {
-      rand += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    const tempPass = `Pass-${rand}#`;
+    const tempPass = generateTempPassword();
     setGeneratedPass(tempPass);
     setSelectedReqToApprove(req);
     setIsApprovedSuccess(false);

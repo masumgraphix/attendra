@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import { AttendanceRecord, AttendanceStatus, Employee, UserRole } from '../../types';
 import {
   Search,
@@ -324,7 +325,7 @@ export const AttendanceTable: React.FC<AttendanceTableProps> = ({
                         className="flex items-center gap-3 text-left hover:opacity-80 group cursor-pointer"
                       >
                         <img
-                          src={employeeAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                          src={employeeAvatar || DEFAULT_AVATAR}
                           alt={employeeName}
                           className="w-8 h-8 rounded-full object-cover ring-2 ring-slate-200/60"
                         />

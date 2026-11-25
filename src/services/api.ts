@@ -10,12 +10,18 @@ import {
   NotificationItem,
   UserAccount,
   RegistrationRequest,
+  OfficeShiftSettings,
+  Company,
+  CompanyAccess,
+  AIInsightData,
 } from '../types';
 import { LatePenaltyRule } from '../utils/salaryDeduction';
 
+const TOKEN_KEY = 'attendra_auth_token';
+
 export function getAuthToken(): string | null {
   try {
-    return localStorage.getItem('attendra_auth_token');
+    return localStorage.getItem(TOKEN_KEY);
   } catch {
     return null;
   }
@@ -23,133 +29,201 @@ export function getAuthToken(): string | null {
 
 export function setAuthToken(token: string | null): void {
   try {
-    if (token) {
-      localStorage.setItem('attendra_auth_token', token);
-    } else {
-      localStorage.removeItem('attendra_auth_token');
-    }
-  } catch (err) {
-    console.error('Error managing auth token in localStorage:', err);
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* private mode */
   }
 }
 
-async function authFetch<T>(url: string, options: RequestInit = {}): Promise<T> {
+/** Fired when the server says the session is gone (expired, password changed, deactivated…). */
+export const SESSION_EXPIRED_EVENT = 'attendra:session-expired';
+/** Fired when the company's trial/subscription no longer allows access. */
+export const COMPANY_BLOCKED_EVENT = 'attendra:company-blocked';
+
+export class ApiError extends Error {
+  status: number;
+  code?: string;
+  body: any;
+  constructor(message: string, status: number, body: any) {
+    super(message);
+    this.status = status;
+    this.code = body?.code;
+    this.body = body;
+  }
+}
+
+async function request<T = any>(url: string, options: RequestInit = {}, raw = false): Promise<T> {
   const token = getAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> || {}),
+    ...((options.headers as Record<string, string>) || {}),
   };
+  if (token) headers.Authorization = `Bearer ${token}`;
 
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+  let response: Response;
+  try {
+    response = await fetch(url, { ...options, headers });
+  } catch {
+    throw new ApiError('Cannot reach the server. Please check your internet connection.', 0, null);
   }
-
-  const response = await fetch(url, {
-    ...options,
-    headers,
-  });
-
-  const json = await response.json();
+  const json = await response.json().catch(() => ({}));
 
   if (!response.ok || json.success === false) {
-    throw new Error(json.message || `API request failed with status ${response.status}`);
+    if (response.status === 401 && token && !url.startsWith('/api/auth/login')) {
+      window.dispatchEvent(new CustomEvent(SESSION_EXPIRED_EVENT));
+    }
+    if (response.status === 402 && json.code === 'COMPANY_BLOCKED') {
+      window.dispatchEvent(new CustomEvent(COMPANY_BLOCKED_EVENT, { detail: json.message }));
+    }
+    throw new ApiError(json.message || `Request failed (${response.status})`, response.status, json);
   }
+  if (raw) return json as T;
+  return (json.data !== undefined ? json.data : json) as T;
+}
 
-  return json.data !== undefined ? json.data : json;
+const body = (data: unknown) => JSON.stringify(data);
+
+export interface SessionResponse {
+  success: boolean;
+  token?: string;
+  account: UserAccount;
+  company: Company | null;
+  companyAccess: CompanyAccess;
+}
+
+export interface CreatedAccountResponse {
+  data: UserAccount;
+  alreadyExisted?: boolean;
+  emailSent: boolean;
+  emailSimulated: boolean;
+  temporaryPassword?: string;
 }
 
 export const api = {
-  // Session Restore
-  async getCurrentUser(): Promise<UserAccount | null> {
-    const token = getAuthToken();
-    if (!token) return null;
+  // ---- Session -----------------------------------------------------------
+  login: (email: string, password: string) =>
+    request<SessionResponse>('/api/auth/login', { method: 'POST', body: body({ email, password }) }, true),
+  signup: (data: { companyName: string; name: string; email: string; password: string; phone?: string }) =>
+    request<SessionResponse>('/api/auth/signup', { method: 'POST', body: body(data) }, true),
+  async getSession(): Promise<SessionResponse | null> {
+    if (!getAuthToken()) return null;
     try {
-      const response = await fetch('/api/auth/me', {
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-      });
-      const result = await response.json();
-      if (response.ok && result.success) {
-        return result.account;
-      }
+      return await request<SessionResponse>('/api/auth/me', {}, true);
     } catch {
-      // quiet fallback
+      return null;
     }
-    return null;
   },
+  forgotPassword: (email: string) =>
+    request<{ message: string; simulated?: boolean }>('/api/auth/forgot-password', { method: 'POST', body: body({ email }) }, true),
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<{ message: string }>('/api/auth/reset-password', { method: 'POST', body: body({ email, code, newPassword }) }, true),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ token: string; account: UserAccount }>('/api/auth/change-password', { method: 'POST', body: body({ currentPassword, newPassword }) }, true),
+  lookupCompany: (code: string) => request<{ name: string; slug: string; logo?: string }>(`/api/public/company/${encodeURIComponent(code.trim().toLowerCase())}`),
+  requestAccess: (req: Partial<RegistrationRequest> & { companyCode: string }) =>
+    request<{ id: string; companyName: string }>('/api/registration-requests', { method: 'POST', body: body(req) }),
 
-  // Departments
-  getDepartments: () => authFetch<Department[]>('/api/departments'),
-  createDepartment: (dept: Partial<Department>) => authFetch<Department>('/api/departments', { method: 'POST', body: JSON.stringify(dept) }),
-  deleteDepartment: (id: string) => authFetch<{ id: string }>(`/api/departments/${id}`, { method: 'DELETE' }),
+  // ---- Company -----------------------------------------------------------
+  getCompany: () => request<Company>('/api/company'),
+  updateCompany: (data: { name?: string; phone?: string; settings?: Partial<Company['settings']> }) =>
+    request<Company>('/api/company', { method: 'PUT', body: body(data) }),
+  updateShiftSettings: (settings: OfficeShiftSettings) =>
+    request<OfficeShiftSettings>('/api/company/shift-settings', { method: 'PUT', body: body(settings) }),
 
-  // Employees
-  getEmployees: () => authFetch<Employee[]>('/api/employees'),
-  createEmployee: (emp: Employee) => authFetch<Employee>('/api/employees', { method: 'POST', body: JSON.stringify(emp) }),
-  updateEmployee: (id: string, emp: Partial<Employee>) => authFetch<Employee>(`/api/employees/${id}`, { method: 'PUT', body: JSON.stringify(emp) }),
-  deactivateEmployee: (id: string) => authFetch<{ id: string }>(`/api/employees/${id}/deactivate`, { method: 'POST' }),
-  deleteEmployee: (id: string) => authFetch<{ id: string }>(`/api/employees/${id}`, { method: 'DELETE' }),
-  importEmployeesCSV: (csvContent: string) => authFetch<{ success: boolean; message: string; importedCount: number; updatedCount: number; errors: string[] }>('/api/employees/import', {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/csv' },
-    body: csvContent,
-  }),
+  // ---- Departments -------------------------------------------------------
+  getDepartments: () => request<Department[]>('/api/departments'),
+  createDepartment: (dept: Partial<Department>) => request<Department>('/api/departments', { method: 'POST', body: body(dept) }),
+  deleteDepartment: (id: string) => request<{ id: string }>(`/api/departments/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
-  // Attendance
-  getAttendance: () => authFetch<AttendanceRecord[]>('/api/attendance'),
-  createAttendance: (rec: AttendanceRecord) => authFetch<AttendanceRecord>('/api/attendance', { method: 'POST', body: JSON.stringify(rec) }),
-  updateAttendance: (id: string, rec: Partial<AttendanceRecord>) => authFetch<AttendanceRecord>(`/api/attendance/${id}`, { method: 'PUT', body: JSON.stringify(rec) }),
-  deleteAttendance: (id: string) => authFetch<{ deletedRecord: AttendanceRecord; auditLog: AuditLog }>(`/api/attendance/${id}`, { method: 'DELETE' }),
+  // ---- Employees ---------------------------------------------------------
+  getEmployees: () => request<Employee[]>('/api/employees'),
+  createEmployee: (emp: Employee) => request<Employee>('/api/employees', { method: 'POST', body: body(emp) }),
+  updateEmployee: (id: string, emp: Partial<Employee>) => request<Employee>(`/api/employees/${id}`, { method: 'PUT', body: body(emp) }),
+  deactivateEmployee: (id: string) => request<{ id: string }>(`/api/employees/${id}/deactivate`, { method: 'POST' }),
+  deleteEmployee: (id: string) => request<{ id: string }>(`/api/employees/${id}`, { method: 'DELETE' }),
+  importEmployeesCSV: (csvContent: string) =>
+    request<{ success: boolean; message: string; importedCount: number; updatedCount: number; errors: string[]; data: Employee[] }>(
+      '/api/employees/import',
+      { method: 'POST', headers: { 'Content-Type': 'text/csv' }, body: csvContent },
+      true
+    ),
 
-  // Leave Requests
-  getLeaveRequests: () => authFetch<LeaveRequest[]>('/api/leave-requests'),
-  createLeaveRequest: (req: LeaveRequest) => authFetch<LeaveRequest>('/api/leave-requests', { method: 'POST', body: JSON.stringify(req) }),
-  updateLeaveRequest: (id: string, req: Partial<LeaveRequest>) => authFetch<LeaveRequest>(`/api/leave-requests/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
-  deleteLeaveRequest: (id: string) => authFetch<{ id: string }>(`/api/leave-requests/${id}`, { method: 'DELETE' }),
+  // ---- Attendance --------------------------------------------------------
+  getAttendance: () => request<AttendanceRecord[]>('/api/attendance'),
+  createAttendance: (rec: AttendanceRecord) => request<AttendanceRecord>('/api/attendance', { method: 'POST', body: body(rec) }),
+  updateAttendance: (id: string, rec: Partial<AttendanceRecord>) => request<AttendanceRecord>(`/api/attendance/${id}`, { method: 'PUT', body: body(rec) }),
+  deleteAttendance: (id: string) => request<{ deletedRecord: AttendanceRecord; auditLog: AuditLog }>(`/api/attendance/${id}`, { method: 'DELETE' }),
 
-  // Leave Policies
-  getLeavePolicies: () => authFetch<LeavePolicy[]>('/api/leave-policies'),
-  updateLeavePolicies: (policies: LeavePolicy[]) => authFetch<LeavePolicy[]>('/api/leave-policies', { method: 'PUT', body: JSON.stringify(policies) }),
+  // ---- Leave -------------------------------------------------------------
+  getLeaveRequests: () => request<LeaveRequest[]>('/api/leave-requests'),
+  createLeaveRequest: (req: LeaveRequest) => request<LeaveRequest>('/api/leave-requests', { method: 'POST', body: body(req) }),
+  updateLeaveRequest: (id: string, req: Partial<LeaveRequest>) => request<LeaveRequest>(`/api/leave-requests/${id}`, { method: 'PUT', body: body(req) }),
+  deleteLeaveRequest: (id: string) => request<{ id: string }>(`/api/leave-requests/${id}`, { method: 'DELETE' }),
+  getLeavePolicies: () => request<LeavePolicy[]>('/api/leave-policies'),
+  updateLeavePolicies: (policies: LeavePolicy[]) => request<LeavePolicy[]>('/api/leave-policies', { method: 'PUT', body: body(policies) }),
 
-  // Announcements
-  getAnnouncements: () => authFetch<Announcement[]>('/api/announcements'),
-  createAnnouncement: (ann: Announcement) => authFetch<Announcement>('/api/announcements', { method: 'POST', body: JSON.stringify(ann) }),
-  deleteAnnouncement: (id: string) => authFetch<{ id: string }>(`/api/announcements/${id}`, { method: 'DELETE' }),
+  // ---- Announcements, holidays ------------------------------------------
+  getAnnouncements: () => request<Announcement[]>('/api/announcements'),
+  createAnnouncement: (ann: Announcement) => request<Announcement>('/api/announcements', { method: 'POST', body: body(ann) }),
+  deleteAnnouncement: (id: string) => request<{ id: string }>(`/api/announcements/${id}`, { method: 'DELETE' }),
+  getHolidays: () => request<CompanyHoliday[]>('/api/holidays'),
+  createHoliday: (hol: CompanyHoliday) => request<CompanyHoliday>('/api/holidays', { method: 'POST', body: body(hol) }),
+  updateHoliday: (id: string, hol: Partial<CompanyHoliday>) => request<CompanyHoliday>(`/api/holidays/${id}`, { method: 'PUT', body: body(hol) }),
+  deleteHoliday: (id: string) => request<{ id: string }>(`/api/holidays/${id}`, { method: 'DELETE' }),
+  syncHolidays: () => request<CompanyHoliday[]>('/api/holidays/sync', { method: 'POST' }),
 
-  // Holidays
-  getHolidays: () => authFetch<CompanyHoliday[]>('/api/holidays'),
-  createHoliday: (hol: CompanyHoliday) => authFetch<CompanyHoliday>('/api/holidays', { method: 'POST', body: JSON.stringify(hol) }),
-  updateHoliday: (id: string, hol: Partial<CompanyHoliday>) => authFetch<CompanyHoliday>(`/api/holidays/${id}`, { method: 'PUT', body: JSON.stringify(hol) }),
-  deleteHoliday: (id: string) => authFetch<{ id: string }>(`/api/holidays/${id}`, { method: 'DELETE' }),
-  syncHolidays: () => authFetch<CompanyHoliday[]>('/api/holidays/sync', { method: 'POST' }),
+  // ---- Audit & notifications --------------------------------------------
+  getAuditLogs: () => request<AuditLog[]>('/api/audit-logs'),
+  createAuditLog: (log: AuditLog) => request<AuditLog>('/api/audit-logs', { method: 'POST', body: body(log) }),
+  getNotifications: () => request<NotificationItem[]>('/api/notifications'),
+  createNotification: (notif: NotificationItem) => request<NotificationItem>('/api/notifications', { method: 'POST', body: body(notif) }),
+  markNotificationsRead: () => request<NotificationItem[]>('/api/notifications/read-all', { method: 'PUT' }),
+  markNotificationRead: (id: string) => request<{ id: string; read: boolean }>(`/api/notifications/${id}/read`, { method: 'PUT' }),
 
-  // Audit Logs
-  getAuditLogs: () => authFetch<AuditLog[]>('/api/audit-logs'),
-  createAuditLog: (log: AuditLog) => authFetch<AuditLog>('/api/audit-logs', { method: 'POST', body: JSON.stringify(log) }),
+  // ---- User accounts & access requests ----------------------------------
+  getUserAccounts: () => request<UserAccount[]>('/api/user-accounts'),
+  createUserAccount: (acc: Partial<UserAccount> & { password?: string }) =>
+    request<CreatedAccountResponse>('/api/user-accounts', { method: 'POST', body: body(acc) }, true),
+  updateUserAccount: (id: string, acc: Partial<UserAccount>) => request<UserAccount>(`/api/user-accounts/${id}`, { method: 'PUT', body: body(acc) }),
+  deleteUserAccount: (id: string) => request<{ id: string }>(`/api/user-accounts/${id}`, { method: 'DELETE' }),
+  getRegistrationRequests: () => request<RegistrationRequest[]>('/api/registration-requests'),
+  updateRegistrationRequest: (id: string, req: Partial<RegistrationRequest>) =>
+    request<RegistrationRequest>(`/api/registration-requests/${id}`, { method: 'PUT', body: body(req) }),
+  deleteRegistrationRequest: (id: string) => request<{ id: string }>(`/api/registration-requests/${id}`, { method: 'DELETE' }),
 
-  // Notifications
-  getNotifications: () => authFetch<NotificationItem[]>('/api/notifications'),
-  createNotification: (notif: NotificationItem) => authFetch<NotificationItem>('/api/notifications', { method: 'POST', body: JSON.stringify(notif) }),
-  markNotificationsRead: () => authFetch<NotificationItem[]>('/api/notifications/read-all', { method: 'PUT' }),
-  markNotificationRead: (id: string) => authFetch<{ id: string; read: boolean }>(`/api/notifications/${id}/read`, { method: 'PUT' }),
+  // ---- Rules, AI ---------------------------------------------------------
+  getLatePenaltyRule: () => request<LatePenaltyRule>('/api/late-penalty-rule'),
+  updateLatePenaltyRule: (rule: LatePenaltyRule) => request<LatePenaltyRule>('/api/late-penalty-rule', { method: 'PUT', body: body(rule) }),
+  getAIInsights: (payload: unknown) => request<AIInsightData>('/api/ai/insights', { method: 'POST', body: body(payload) }),
 
-  // User Accounts
-  getUserAccounts: () => authFetch<UserAccount[]>('/api/user-accounts'),
-  createUserAccount: (acc: UserAccount) => authFetch<UserAccount>('/api/user-accounts', { method: 'POST', body: JSON.stringify(acc) }),
-  updateUserAccount: (id: string, acc: Partial<UserAccount>) => authFetch<UserAccount>(`/api/user-accounts/${id}`, { method: 'PUT', body: JSON.stringify(acc) }),
-  deleteUserAccount: (id: string) => authFetch<{ id: string }>(`/api/user-accounts/${id}`, { method: 'DELETE' }),
-
-  // Registration Requests
-  getRegistrationRequests: () => authFetch<RegistrationRequest[]>('/api/registration-requests'),
-  createRegistrationRequest: (req: RegistrationRequest) => fetch('/api/registration-requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) }),
-  updateRegistrationRequest: (id: string, req: Partial<RegistrationRequest>) => authFetch<RegistrationRequest>(`/api/registration-requests/${id}`, { method: 'PUT', body: JSON.stringify(req) }),
-
-  // Late Penalty Rule
-  getLatePenaltyRule: () => authFetch<LatePenaltyRule>('/api/late-penalty-rule'),
-  updateLatePenaltyRule: (rule: LatePenaltyRule) => authFetch<LatePenaltyRule>('/api/late-penalty-rule', { method: 'PUT', body: JSON.stringify(rule) }),
-
-  // Reset System to Demo Data
-  resetDemoData: () => authFetch<{ success: boolean; message: string }>('/api/reset-demo-data', { method: 'POST' }),
+  // ---- Platform owner ----------------------------------------------------
+  platformOverview: () => request<PlatformOverview>('/api/platform/overview'),
+  platformCreateCompany: (data: { companyName: string; ownerName: string; ownerEmail: string; phone?: string; plan: string }) =>
+    request<{ data: Company; emailSent: boolean; temporaryPassword?: string }>('/api/platform/companies', { method: 'POST', body: body(data) }, true),
+  platformUpdateCompany: (id: string, data: { status?: string; plan?: string; maxEmployees?: number; extendTrialDays?: number; extendPaidDays?: number }) =>
+    request<Company>(`/api/platform/companies/${id}`, { method: 'PUT', body: body(data) }),
+  platformResetOwner: (id: string, email?: string) =>
+    request<{ data: { email: string }; emailSent: boolean; temporaryPassword?: string }>(`/api/platform/companies/${id}/reset-owner`, { method: 'POST', body: body({ email }) }, true),
 };
+
+export interface PlatformCompany extends Company {
+  employeeCount: number;
+  userCount: number;
+  lastActiveAt: string | null;
+  owner: { name: string; email: string } | null;
+}
+
+export interface PlatformOverview {
+  stats: {
+    totalCompanies: number;
+    activePaid: number;
+    onTrial: number;
+    trialExpired: number;
+    suspended: number;
+    totalEmployees: number;
+    monthlyRevenueBdt: number;
+  };
+  companies: PlatformCompany[];
+  plans: Record<string, { name: string; maxEmployees: number; priceBdt: number }>;
+}

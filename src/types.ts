@@ -8,7 +8,7 @@ export interface OfficeShiftSettings {
   ipWhitelist: string;
 }
 
-export type UserRole = 'super_admin' | 'admin' | 'employee';
+export type UserRole = 'platform_admin' | 'super_admin' | 'admin' | 'employee';
 
 export interface UserAccount {
   id: string;
@@ -20,6 +20,40 @@ export interface UserAccount {
   status: 'active' | 'inactive';
   avatar?: string;
   createdAt: string;
+  companyId?: string | null;
+  mustChangePassword?: boolean;
+  /** legacy client-side field, never sent by the server */
+  passwordHash?: string;
+}
+
+export interface CompanySettings {
+  timezone: string;
+  country: string;
+  currency: string;
+  logoUrl: string;
+  shift: OfficeShiftSettings;
+  latePenaltyRule: { threshold: number; deductionDays: number };
+  [key: string]: any;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  slug: string;
+  status: 'trial' | 'active' | 'suspended' | 'cancelled';
+  plan: string;
+  planName: string;
+  maxEmployees: number;
+  trialEndsAt: string | null;
+  paidUntil: string | null;
+  phone: string | null;
+  settings: CompanySettings;
+  createdAt: string;
+}
+
+export interface CompanyAccess {
+  ok: boolean;
+  reason?: string;
 }
 
 export interface RegistrationRequest {

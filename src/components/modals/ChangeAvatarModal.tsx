@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { DEFAULT_AVATAR, initialsAvatar, AVATAR_COLOR_COUNT } from '../../utils/avatar';
 import { X, Camera, Upload, Link as LinkIcon, Check, Image as ImageIcon } from 'lucide-react';
 import { Employee } from '../../types';
 
@@ -9,16 +10,6 @@ interface ChangeAvatarModalProps {
   onUpdateAvatar: (employeeId: string, newAvatarUrl: string) => void;
 }
 
-const PRESET_AVATARS = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=400&auto=format&fit=crop&q=80',
-  'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=400&auto=format&fit=crop&q=80',
-];
 
 // Uploaded photos are resized to a small square and re-encoded as
 // compressed JPEG before being stored anywhere. Raw phone photos can be
@@ -148,7 +139,7 @@ export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
               alt="Avatar Preview"
               className="w-24 h-24 rounded-full object-cover ring-4 ring-blue-500/30 shadow-lg"
               onError={(e) => {
-                (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400';
+                (e.target as HTMLImageElement).src = DEFAULT_AVATAR;
               }}
             />
             <div className="absolute inset-0 bg-black/20 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -226,7 +217,7 @@ export const ChangeAvatarModal: React.FC<ChangeAvatarModalProps> = ({
           <div className="space-y-2">
             <p className="text-[11px] font-bold text-slate-600">Choose from curated avatars:</p>
             <div className="grid grid-cols-4 gap-2 max-h-40 overflow-y-auto p-1">
-              {PRESET_AVATARS.map((url, idx) => (
+              {Array.from({ length: AVATAR_COLOR_COUNT }, (_, i) => initialsAvatar(employee.name, i)).map((url, idx) => (
                 <button
                   key={idx}
                   type="button"

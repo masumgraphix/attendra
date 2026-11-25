@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { nextEmployeeCode } from '../../utils/id';
+import { initialsAvatar } from '../../utils/avatar';
 import { X, UserPlus, Loader2 } from 'lucide-react';
 import { EmploymentType } from '../../types';
 
@@ -6,21 +8,14 @@ interface AddEmployeeModalProps {
   isOpen: boolean;
   onClose: () => void;
   onAddEmployee: (employee: any) => Promise<void> | void;
+  existingEmployees?: { id: string }[];
 }
-
-const AVATAR_POOL = [
-  'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
-  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&q=80&w=200',
-  'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&q=80&w=200',
-  'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&q=80&w=200',
-  'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200',
-  'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&q=80&w=200',
-];
 
 export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
   isOpen,
   onClose,
   onAddEmployee,
+  existingEmployees = [],
 }) => {
   const [name, setName] = useState('');
   const [role, setRole] = useState('');
@@ -37,15 +32,14 @@ export const AddEmployeeModal: React.FC<AddEmployeeModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      const randomAvatar = AVATAR_POOL[Math.floor(Math.random() * AVATAR_POOL.length)];
       await onAddEmployee({
-        id: `DG-${Math.floor(1000 + Math.random() * 9000)}`,
+        id: nextEmployeeCode(existingEmployees),
         name,
         role,
         department,
         email,
-        phone: '+880 1711-000000',
-        avatar: randomAvatar,
+        phone: '',
+        avatar: initialsAvatar(name),
         status: 'active',
         employmentType,
         location: 'San Francisco, CA (HQ)',

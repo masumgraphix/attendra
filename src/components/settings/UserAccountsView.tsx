@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
+import { generateTempPassword } from '../../utils/id';
 import { UserAccount, Employee, UserRole, RegistrationRequest } from '../../types';
 import {
   Users,
@@ -129,7 +131,7 @@ export const UserAccountsView: React.FC<UserAccountsViewProps> = ({
       role,
       employeeId: role === 'employee' || role === 'admin' ? linkedEmployeeId : undefined,
       status: 'active',
-      avatar: linkedEmp?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+      avatar: linkedEmp?.avatar || DEFAULT_AVATAR,
     });
 
     setIsCreateModalOpen(false);
@@ -156,8 +158,7 @@ export const UserAccountsView: React.FC<UserAccountsViewProps> = ({
   };
 
   const handleOpenApproveModal = (req: RegistrationRequest) => {
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const newPass = `Attendra#${randomNum}`;
+    const newPass = generateTempPassword();
     setGeneratedPass(newPass);
     setSelectedRequestToApprove(req);
     setEmailSentSuccess(false);
@@ -341,7 +342,7 @@ export const UserAccountsView: React.FC<UserAccountsViewProps> = ({
                     {/* Profile Meta */}
                     <div className="flex items-center gap-3.5 flex-1 min-w-[200px]">
                       <img
-                        src={acc.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+                        src={acc.avatar || DEFAULT_AVATAR}
                         alt={acc.name}
                         className="w-10 h-10 rounded-full object-cover ring-2 ring-slate-200 shrink-0"
                       />

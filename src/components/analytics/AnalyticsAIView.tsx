@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AIInsightData, AttendanceRecord, Employee, Department, UserRole } from '../../types';
-import { PEAK_HOURS_DATA } from '../../data/mockData';
+const PEAK_HOURS_DATA: { hour: string; count: number }[] = [];
 import { isLateEntry } from '../../utils/salaryDeduction';
 import {
   BarChart,

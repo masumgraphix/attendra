@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { DEFAULT_AVATAR } from './utils/avatar';
 import {
   NavSection,
   Employee,
@@ -26,20 +27,13 @@ import {
   saveToLocalStorage,
   clearAttendraLocalStorage,
 } from './utils/storage';
-import { api, getAuthToken, setAuthToken } from './services/api';
-import {
-  INITIAL_EMPLOYEES,
-  INITIAL_ATTENDANCE,
-  INITIAL_LEAVE_REQUESTS,
-  INITIAL_DEPARTMENTS,
-  INITIAL_ANNOUNCEMENTS,
-  INITIAL_HOLIDAYS,
-  INITIAL_AUDIT_LOGS,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_LEAVE_POLICIES,
-  INITIAL_USER_ACCOUNTS,
-  INITIAL_REGISTRATION_REQUESTS,
-} from './data/mockData';
+import { api, getAuthToken, setAuthToken as storeAuthToken, SESSION_EXPIRED_EVENT, COMPANY_BLOCKED_EVENT, SessionResponse } from './services/api';
+import { newId, nextEmployeeCode } from './utils/id';
+import { initialsAvatar } from './utils/avatar';
+import { Company, CompanyAccess } from './types';
+import { PlatformAdminView } from './components/platform/PlatformAdminView';
+import { CompanyBlockedView } from './components/auth/CompanyBlockedView';
+import { ForcePasswordChangeView } from './components/auth/ForcePasswordChangeView';
 
 // Auth Components
 import { LoginView } from './components/auth/LoginView';
@@ -117,72 +111,52 @@ function calculateLeaveDays(startDateStr: string, endDateStr: string): number {
   return Math.max(1, days);
 }
 
+// Older versions cached company data in the browser. Remove it once so it can never leak between users.
+try {
+  for (const key of Object.values(STORAGE_KEYS)) {
+    if (key !== STORAGE_KEYS.ACTIVE_SECTION) localStorage.removeItem(key);
+  }
+} catch {
+  /* storage unavailable */
+}
+
 export default function App() {
-  // Core Datasets with localStorage persistence initialization
-  const [userAccounts, setUserAccounts] = useState<UserAccount[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.USER_ACCOUNTS, INITIAL_USER_ACCOUNTS)
-  );
-  const [registrationRequests, setRegistrationRequests] = useState<RegistrationRequest[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.REGISTRATION_REQUESTS, INITIAL_REGISTRATION_REQUESTS)
-  );
-  const [latePenaltyRule, setLatePenaltyRule] = useState<LatePenaltyRule>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.LATE_PENALTY_RULE, { threshold: 3, deductionDays: 1 })
-  );
-  const [shiftSettings, setShiftSettings] = useState<OfficeShiftSettings>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.OFFICE_SHIFT_SETTINGS, {
-      officeStartTime: '09:00',
-      lateThresholdTime: '09:20',
-      officeEndTime: '17:00',
-      weeklyOff: 'Friday',
-      workDays: 'Saturday to Thursday',
-      enableGeofence: true,
-      ipWhitelist: '192.168.1.0/24, 10.0.4.0/16',
-    })
-  );
-
-  const [employees, setEmployees] = useState<Employee[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.EMPLOYEES, INITIAL_EMPLOYEES)
-  );
+  // All company data lives on the server. Nothing is cached in the browser, so
+  // a shared computer never shows one company's data to another user.
+  const DEFAULT_SHIFT: OfficeShiftSettings = {
+    officeStartTime: '09:00',
+    lateThresholdTime: '09:15',
+    officeEndTime: '18:00',
+    weeklyOff: 'Friday',
+    workDays: 'Saturday to Thursday',
+    enableGeofence: false,
+    ipWhitelist: '',
+  };
+  const [userAccounts, setUserAccounts] = useState<UserAccount[]>([]);
+  const [registrationRequests, setRegistrationRequests] = useState<RegistrationRequest[]>([]);
+  const [latePenaltyRule, setLatePenaltyRule] = useState<LatePenaltyRule>({ threshold: 3, deductionDays: 1 });
+  const [shiftSettings, setShiftSettings] = useState<OfficeShiftSettings>(DEFAULT_SHIFT);
+  const [employees, setEmployees] = useState<Employee[]>([]);
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
-  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.LEAVE_REQUESTS, INITIAL_LEAVE_REQUESTS)
-  );
-  const [leavePolicies, setLeavePolicies] = useState<LeavePolicy[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.LEAVE_POLICIES, INITIAL_LEAVE_POLICIES)
-  );
-  const [departments, setDepartments] = useState<Department[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.DEPARTMENTS, INITIAL_DEPARTMENTS)
-  );
-  const [announcements, setAnnouncements] = useState<Announcement[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.ANNOUNCEMENTS, INITIAL_ANNOUNCEMENTS)
-  );
-  const [holidays, setHolidays] = useState<CompanyHoliday[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.HOLIDAYS, INITIAL_HOLIDAYS)
-  );
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.AUDIT_LOGS, INITIAL_AUDIT_LOGS)
-  );
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() =>
-    loadFromLocalStorage(STORAGE_KEYS.NOTIFICATIONS, INITIAL_NOTIFICATIONS)
-  );
+  const [leaveRequests, setLeaveRequests] = useState<LeaveRequest[]>([]);
+  const [leavePolicies, setLeavePolicies] = useState<LeavePolicy[]>([]);
+  const [departments, setDepartments] = useState<Department[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [holidays, setHolidays] = useState<CompanyHoliday[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
 
-  // Authentication State (defaults to null unless session userId exists in userAccounts)
-  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => {
-    try {
-      const sessionUserId = loadFromLocalStorage<string | null>(STORAGE_KEYS.SESSION_USER_ID, null);
-      if (sessionUserId) {
-        const restoredAccounts = loadFromLocalStorage(STORAGE_KEYS.USER_ACCOUNTS, INITIAL_USER_ACCOUNTS);
-        const match = restoredAccounts.find((acc) => acc.id === sessionUserId);
-        if (match && match.status !== 'inactive') {
-          const { password: _p, ...safeAcc } = match;
-          return safeAcc as UserAccount;
-        }
-      }
-    } catch (err) {
-      console.warn('Error restoring session user from localStorage:', err);
-    }
-    return null;
-  });
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
+  const [company, setCompany] = useState<Company | null>(null);
+  const [companyAccess, setCompanyAccess] = useState<CompanyAccess>({ ok: true });
+  const [isBooting, setIsBooting] = useState<boolean>(() => !!getAuthToken());
+
+  // Audit lines and notifications are created optimistically in many handlers;
+  // anything new that did not come from the server is pushed to it here.
+  const syncedAuditIds = useRef<Set<string>>(new Set());
+  const syncedNotifIds = useRef<Set<string>>(new Set());
+  const sessionRoleRef = useRef<UserRole | null>(null);
+  const isAdminRole = (r: UserRole | null) => r === 'admin' || r === 'super_admin';
 
   const [authToken, setAuthToken] = useState<string | null>(() => {
     try {
@@ -248,6 +222,12 @@ export default function App() {
     }, 4000);
   };
 
+  // Every server write goes through here on failure, so nothing fails silently.
+  const reportSaveError = (err: unknown) => {
+    const msg = err instanceof Error ? err.message : 'Please try again.';
+    addToast('error', 'Not saved', `${msg} Reload the page to see the latest data.`);
+  };
+
   const removeToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
@@ -256,47 +236,35 @@ export default function App() {
     addToast('warning', 'Storage Limit Warning', 'Unable to save changes locally — storage may be full.');
   };
 
-  // Session persistence effect: saves session_userId when currentUser changes
+  // Keep currentUser synced with userAccounts updates (e.g. role change)
   useEffect(() => {
-    if (currentUser) {
-      saveToLocalStorage(STORAGE_KEYS.SESSION_USER_ID, currentUser.id, handleQuotaWarning);
-    } else {
-      try {
-        localStorage.removeItem(STORAGE_KEYS.SESSION_USER_ID);
-      } catch {
-        // ignore
-      }
-    }
-  }, [currentUser]);
-
-  // Keep currentUser synced with userAccounts updates (e.g. role change or deactivation)
-  useEffect(() => {
-    if (currentUser) {
+    if (currentUser && currentUser.role !== 'platform_admin') {
       const match = userAccounts.find((a) => a.id === currentUser.id);
-      if (!match || match.status === 'inactive') {
-        setCurrentUser(null);
-        addToast('warning', 'Session Terminated', 'Your user account was updated or deactivated.');
-      } else if (match.role !== currentUser.role || match.name !== currentUser.name || match.email !== currentUser.email) {
-        const { password: _p, ...safeAcc } = match;
-        setCurrentUser(safeAcc as UserAccount);
+      if (match && (match.role !== currentUser.role || match.name !== currentUser.name || match.email !== currentUser.email)) {
+        setCurrentUser({ ...currentUser, role: match.role, name: match.name, email: match.email });
       }
     }
   }, [userAccounts]);
 
-  // Auto-save useEffect per state value
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.EMPLOYEES, employees, handleQuotaWarning); }, [employees]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.ATTENDANCE, attendance, handleQuotaWarning); }, [attendance]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.LEAVE_REQUESTS, leaveRequests, handleQuotaWarning); }, [leaveRequests]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.LEAVE_POLICIES, leavePolicies, handleQuotaWarning); }, [leavePolicies]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.ANNOUNCEMENTS, announcements, handleQuotaWarning); }, [announcements]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.HOLIDAYS, holidays, handleQuotaWarning); }, [holidays]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.AUDIT_LOGS, auditLogs, handleQuotaWarning); }, [auditLogs]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.NOTIFICATIONS, notifications, handleQuotaWarning); }, [notifications]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.USER_ACCOUNTS, userAccounts, handleQuotaWarning); }, [userAccounts]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.REGISTRATION_REQUESTS, registrationRequests, handleQuotaWarning); }, [registrationRequests]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.DEPARTMENTS, departments, handleQuotaWarning); }, [departments]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.LATE_PENALTY_RULE, latePenaltyRule, handleQuotaWarning); }, [latePenaltyRule]);
-  useEffect(() => { saveToLocalStorage(STORAGE_KEYS.OFFICE_SHIFT_SETTINGS, shiftSettings, handleQuotaWarning); }, [shiftSettings]);
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'platform_admin') return;
+    for (const log of auditLogs) {
+      if (!syncedAuditIds.current.has(log.id)) {
+        syncedAuditIds.current.add(log.id);
+        api.createAuditLog(log).catch(() => {});
+      }
+    }
+  }, [auditLogs]);
+
+  useEffect(() => {
+    if (!currentUser || currentUser.role === 'platform_admin') return;
+    for (const n of notifications) {
+      if (!syncedNotifIds.current.has(n.id)) {
+        syncedNotifIds.current.add(n.id);
+        api.createNotification(n).catch(() => {});
+      }
+    }
+  }, [notifications]);
 
   // Dynamically computed effective departments (combines stored custom departments with active employee departments)
   const effectiveDepartments = useMemo(() => {
@@ -313,7 +281,7 @@ export default function App() {
         const key = emp.department.trim().toLowerCase();
         if (!deptMap.has(key)) {
           deptMap.set(key, {
-            id: `DEP-${Math.floor(100 + Math.random() * 900)}`,
+            id: newId('dep'),
             name: emp.department.trim(),
             headName: emp.name,
             headAvatar: emp.avatar,
@@ -341,7 +309,7 @@ export default function App() {
         department: 'Administration',
         email: currentUser.email,
         phone: '',
-        avatar: currentUser.avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&q=80&w=200',
+        avatar: currentUser.avatar || DEFAULT_AVATAR,
         status: 'active',
         employmentType: 'full_time',
         location: 'Headquarters',
@@ -372,9 +340,7 @@ export default function App() {
 
     setAttendance((prev) => [newRecord, ...prev]);
 
-    api.createAttendance(newRecord).catch((err) => {
-      console.error("Failed to persist check-in to database:", err);
-    });
+    api.createAttendance(newRecord).catch(reportSaveError);
 
     addToast(
       'success',
@@ -420,9 +386,7 @@ export default function App() {
       return copy;
     });
 
-    api.updateAttendance(updatedRecord.id, updatedRecord).catch((err) => {
-      console.error("Failed to persist check-out to database:", err);
-    });
+    api.updateAttendance(updatedRecord.id, updatedRecord).catch(reportSaveError);
 
     addToast(
       'success',
@@ -443,10 +407,13 @@ export default function App() {
         api.getLeavePolicies().catch((e) => { console.error('[Attendra] Failed to load leave policies from server:', e); return null; }),
         api.getAnnouncements().catch((e) => { console.error('[Attendra] Failed to load announcements from server:', e); return null; }),
         api.getHolidays().catch((e) => { console.error('[Attendra] Failed to load holidays from server:', e); return null; }),
-        api.getAuditLogs().catch((e) => { console.error('[Attendra] Failed to load audit logs from server:', e); return null; }),
+        (currentUser?.role === 'super_admin' || sessionRoleRef.current === 'super_admin'
+          ? api.getAuditLogs()
+          : Promise.resolve([] as AuditLog[])
+        ).catch((e) => { console.error('[Attendra] Failed to load audit logs from server:', e); return null; }),
         api.getNotifications().catch((e) => { console.error('[Attendra] Failed to load notifications from server:', e); return null; }),
-        api.getUserAccounts().catch((e) => { console.error('[Attendra] Failed to load user accounts from server:', e); return null; }),
-        api.getRegistrationRequests().catch((e) => { console.error('[Attendra] Failed to load registration requests from server:', e); return null; }),
+        (isAdminRole(sessionRoleRef.current) ? api.getUserAccounts() : Promise.resolve([] as UserAccount[])).catch((e) => { console.error('[Attendra] Failed to load user accounts from server:', e); return null; }),
+        (isAdminRole(sessionRoleRef.current) ? api.getRegistrationRequests() : Promise.resolve([] as RegistrationRequest[])).catch((e) => { console.error('[Attendra] Failed to load registration requests from server:', e); return null; }),
         api.getLatePenaltyRule().catch((e) => { console.error('[Attendra] Failed to load late penalty rule from server:', e); return null; }),
         api.getDepartments().catch((e) => { console.error('[Attendra] Failed to load departments from server:', e); return null; }),
       ]);
@@ -457,12 +424,12 @@ export default function App() {
       if (pols) setLeavePolicies(pols);
       if (anns) setAnnouncements(anns);
       if (hols) setHolidays(hols);
-      if (logs) setAuditLogs(logs);
-      if (notifs) setNotifications(notifs);
+      if (logs) { logs.forEach((l) => syncedAuditIds.current.add(l.id)); setAuditLogs(logs); }
+      if (notifs) { notifs.forEach((n) => syncedNotifIds.current.add(n.id)); setNotifications(notifs); }
       if (accs) setUserAccounts(accs);
       if (regs) setRegistrationRequests(regs);
       if (rule) setLatePenaltyRule(rule);
-      if (depts && depts.length > 0) setDepartments(depts);
+      if (depts) setDepartments(depts);
 
       // If the core datasets failed to load, the screen may be showing stale/local/demo
       // data instead of the real database — warn instead of failing silently.
@@ -470,7 +437,7 @@ export default function App() {
         addToast(
           'error',
           'Could not sync with server database',
-          'Showing locally cached data. Some information may be outdated — check your internet connection and reload.'
+          'Some information could not be loaded — check your internet connection and reload.'
         );
       }
     } catch (err) {
@@ -483,41 +450,66 @@ export default function App() {
     }
   };
 
-  // Restore authenticated session from backend JWT token on app boot
-  useEffect(() => {
-    async function initSession() {
-      const token = getAuthToken();
-      if (token) {
-        try {
-          const user = await api.getCurrentUser();
-          if (user) {
-            setCurrentUser(user);
-            await loadDatabaseData();
-          } else {
-            setAuthToken(null);
-            setCurrentUser(null);
-          }
-        } catch {
-          setAuthToken(null);
-          setCurrentUser(null);
-        }
-      }
-    }
-    initSession();
-  }, []);
-
-  const handleResetToDemoData = async () => {
-    try {
-      await api.resetDemoData();
-    } catch {
-      // quiet fallback
-    }
-    clearAttendraLocalStorage();
+  const resetSession = () => {
+    storeAuthToken(null);
     setAuthToken(null);
     setCurrentUser(null);
-    setActiveSection('dashboard');
-    window.location.reload();
+    setCompany(null);
+    setCompanyAccess({ ok: true });
+    sessionRoleRef.current = null;
+    setEmployees([]); setAttendance([]); setLeaveRequests([]); setLeavePolicies([]);
+    setDepartments([]); setAnnouncements([]); setHolidays([]); setAuditLogs([]);
+    setNotifications([]); setUserAccounts([]); setRegistrationRequests([]);
+    setShiftSettings(DEFAULT_SHIFT); setLatePenaltyRule({ threshold: 3, deductionDays: 1 });
+    syncedAuditIds.current.clear();
+    syncedNotifIds.current.clear();
+    clearAttendraLocalStorage();
   };
+
+  const applySession = async (session: SessionResponse) => {
+    if (session.token) {
+      storeAuthToken(session.token); // write synchronously: the data requests below need it
+      setAuthToken(session.token);
+    }
+    sessionRoleRef.current = session.account.role;
+    setCurrentUser(session.account);
+    setCompany(session.company);
+    setCompanyAccess(session.companyAccess || { ok: true });
+    if (session.company?.settings) {
+      setShiftSettings({ ...DEFAULT_SHIFT, ...session.company.settings.shift });
+      setLatePenaltyRule(session.company.settings.latePenaltyRule);
+    }
+    if (session.account.role !== 'platform_admin' && session.companyAccess?.ok !== false && !session.account.mustChangePassword) {
+      await loadDatabaseData();
+    }
+  };
+
+  // Restore the session from the stored token on app start.
+  useEffect(() => {
+    (async () => {
+      const session = await api.getSession();
+      if (session) await applySession(session);
+      else if (getAuthToken()) resetSession();
+      setIsBooting(false);
+    })();
+  }, []);
+
+  // Server-side session invalidation (deactivated, password changed elsewhere, expired).
+  useEffect(() => {
+    const onExpired = () => {
+      resetSession();
+      addToast('warning', 'Signed out', 'Your session has ended. Please sign in again.');
+    };
+    const onBlocked = (e: Event) => {
+      setCompanyAccess({ ok: false, reason: (e as CustomEvent).detail });
+    };
+    window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    window.addEventListener(COMPANY_BLOCKED_EVENT, onBlocked);
+    return () => {
+      window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+      window.removeEventListener(COMPANY_BLOCKED_EVENT, onBlocked);
+    };
+  }, []);
 
   // Route Guarding Enforcement based on role
   const handleSelectSection = (sec: NavSection) => {
@@ -546,62 +538,67 @@ export default function App() {
   const fetchAIInsights = async () => {
     setIsLoadingAI(true);
     try {
-      const res = await fetch('/api/ai/insights', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          period: 'July 2026',
-          department: 'All Enterprise Departments',
-          metrics: {
-            totalEmployees: employees.length,
-            presentToday: attendance.filter((a) => a.status === 'present' || a.status === 'grace_period').length,
-            presentRate: '92.1%',
-            lateToday: attendance.filter((a) => a.status === 'late').length,
-            lateRate: '5.0%',
-            absentToday: attendance.filter((a) => a.status === 'absent').length,
-            leaveToday: attendance.filter((a) => a.status === 'on_leave').length,
-            avgEntry: '08:42 AM',
-            avgExit: '05:48 PM',
-            avgHours: '8.6 hrs',
-            overtimeHours: '312 hrs',
-          },
-        }),
+      const todayStr = new Date().toISOString().split('T')[0];
+      const today = attendance.filter((a) => a.date === todayStr);
+      const activeCount = employees.filter((e) => e.status !== 'inactive').length || 1;
+      const presentToday = today.filter((a) => ['present', 'grace_period', 'late', 'wfh', 'official_tour'].includes(a.status)).length;
+      const lateToday = today.filter((a) => a.status === 'late').length;
+      const worked = attendance.filter((a) => a.workHours > 0);
+      const avgHours = worked.length ? worked.reduce((s, a) => s + a.workHours, 0) / worked.length : 0;
+      const overtime = attendance.reduce((s, a) => s + (a.overtimeHours || 0), 0);
+      const data = await api.getAIInsights({
+        period: new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+        department: 'All Departments',
+        metrics: {
+          totalEmployees: activeCount,
+          presentToday,
+          presentRate: `${((presentToday / activeCount) * 100).toFixed(1)}%`,
+          lateToday,
+          lateRate: `${((lateToday / activeCount) * 100).toFixed(1)}%`,
+          absentToday: Math.max(0, activeCount - presentToday - today.filter((a) => a.status === 'on_leave').length),
+          leaveToday: today.filter((a) => a.status === 'on_leave').length,
+          avgEntry: '—',
+          avgExit: '—',
+          avgHours: `${avgHours.toFixed(1)} hrs`,
+          overtimeHours: `${overtime.toFixed(0)} hrs`,
+        },
       });
-
-      const data = await res.json();
-      if (data.success && data.data) {
-        setAiData(data.data);
-        addToast('success', 'AI Strategic Analysis Complete', 'Generated latest workforce insights and risk predictions.');
+      if (data) {
+        setAiData(data);
+        addToast('success', 'AI analysis complete', 'Generated the latest workforce insights.');
       }
     } catch (err) {
       console.error('Failed to fetch AI Insights', err);
-      addToast('error', 'AI Analysis Error', 'Unable to reach backend AI engine. Using cached metrics.');
+      addToast('error', 'AI analysis unavailable', err instanceof Error ? err.message : 'Please try again shortly.');
     } finally {
       setIsLoadingAI(false);
     }
   };
 
+  // Run AI analysis only when the analytics page is opened (it costs API credits).
   useEffect(() => {
-    if (currentUser && currentUser.role !== 'employee') {
+    if (activeSection === 'analytics' && currentUser && currentUser.role !== 'employee' && !aiData && !isLoadingAI && companyAccess.ok) {
       fetchAIInsights();
     }
-  }, [currentUser]);
+  }, [activeSection, currentUser]);
 
   // Account Management Handlers for Super Admin
-  const handleCreateUserAccount = (newAccData: Omit<UserAccount, 'id' | 'createdAt'>) => {
-    const newAcc: UserAccount = {
-      ...newAccData,
-      id: `USR-${Math.floor(7000 + Math.random() * 1000)}`,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-    setUserAccounts((prev) => [newAcc, ...prev]);
-
-    api.createUserAccount(newAcc).catch((err) =>
-      console.error('Failed to save user account to server DB:', err)
-    );
+  const handleCreateUserAccount = async (newAccData: Omit<UserAccount, 'id' | 'createdAt'>) => {
+    let newAcc: UserAccount;
+    try {
+      const res = await api.createUserAccount(newAccData);
+      newAcc = res.data;
+      setUserAccounts((prev) => [newAcc, ...prev.filter((a) => a.id !== newAcc.id)]);
+      if (!res.emailSent && res.temporaryPassword) {
+        addToast('warning', 'Email not sent', `Share this temporary password with ${newAcc.name}: ${res.temporaryPassword}`);
+      }
+    } catch (err) {
+      addToast('error', 'Could not create account', err instanceof Error ? err.message : 'Please try again.');
+      return;
+    }
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -618,18 +615,20 @@ export default function App() {
   };
 
   const handleUpdateUserAccount = (updatedAcc: UserAccount) => {
+    const previous = userAccounts;
     setUserAccounts((prev) => prev.map((a) => (a.id === updatedAcc.id ? updatedAcc : a)));
 
     if (currentUser?.id === updatedAcc.id) {
       setCurrentUser(updatedAcc);
     }
 
-    api.updateUserAccount(updatedAcc.id, updatedAcc).catch((err) =>
-      console.error('Failed to update user account on server DB:', err)
-    );
+    api.updateUserAccount(updatedAcc.id, updatedAcc).catch((err) => {
+      setUserAccounts(previous);
+      addToast('error', 'Account not updated', err instanceof Error ? err.message : 'Please try again.');
+    });
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -651,12 +650,13 @@ export default function App() {
 
     setUserAccounts((prev) => prev.filter((a) => a.id !== accountId));
 
-    api.deleteUserAccount(accountId).catch((err) =>
-      console.error('Failed to delete user account on server DB:', err)
-    );
+    api.deleteUserAccount(accountId).catch((err) => {
+      setUserAccounts((prev) => [target, ...prev]);
+      addToast('error', 'Account not removed', err instanceof Error ? err.message : 'Please try again.');
+    });
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -672,78 +672,13 @@ export default function App() {
     addToast('info', 'Account Revoked', `Removed login access for ${target.name}.`);
   };
 
-  // Registration Handlers for Employee Self-Registration & Super Admin Approval
-  const handleRequestRegistration = (req: {
-    employeeName: string;
-    employeeId?: string;
-    email: string;
-    department: string;
-    designation: string;
-    dob?: string;
-    nidNumber?: string;
-    requestedRole: 'employee';
-  }) => {
-    const newReq: RegistrationRequest = {
-      id: `REG-${Math.floor(9000 + Math.random() * 1000)}`,
-      employeeId: req.employeeId,
-      employeeName: req.employeeName,
-      email: req.email,
-      department: req.department,
-      designation: req.designation,
-      dob: req.dob,
-      nidNumber: req.nidNumber,
-      requestedRole: req.requestedRole,
-      requestedAt: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      status: 'pending',
-    };
-
-    setRegistrationRequests((prev) => [newReq, ...prev]);
-
-    api.createRegistrationRequest(newReq).catch((err) => {
-      console.error("Failed to save registration request to server DB:", err);
-    });
-
-    // Audit log
-    const newAudit: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
-      timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-      administrator: req.employeeName,
-      actorRole: 'Employee Candidate',
-      action: 'Requested Account Access',
-      target: `${req.employeeName} (${req.designation})`,
-      oldValue: 'Unregistered',
-      newValue: `Pending Approval for ${req.email}`,
-      reason: 'Employee submitted registration request with Department and Designation details.',
-      ipAddress: '192.168.1.120',
-      status: 'warning',
-    };
-    setAuditLogs((prev) => [newAudit, ...prev]);
-
-    // Notification for Super Admin
-    const newNotif: NotificationItem = {
-      id: `NOT-${Date.now()}`,
-      type: 'system',
-      title: 'New Employee Registration Request',
-      message: `${req.employeeName} (${req.designation}, ${req.department}) requested portal access. Pending Admin review.`,
-      time: 'Just now',
-      read: false,
-    };
-    setNotifications((prev) => [newNotif, ...prev]);
-
-    addToast(
-      'success',
-      'Registration Request Sent',
-      `Your account request for ${req.employeeName} has been submitted for Admin approval.`
-    );
-  };
-
   const handleAcceptRegistration = async (
     req: RegistrationRequest,
     autoGeneratedPassword: string
   ): Promise<{ emailSent: boolean; emailSimulated: boolean }> => {
     // Update request status
     setRegistrationRequests((prev) =>
-      prev.map((r) => (r.id === req.id ? { ...r, status: 'approved', autoGeneratedPassword } : r))
+      prev.map((r) => (r.id === req.id ? { ...r, status: 'approved' } : r))
     );
 
     // Auto-create department if mentioned in registration request and not already present
@@ -752,20 +687,18 @@ export default function App() {
       const exists = departments.some((d) => d.name.toLowerCase() === reqDeptName.toLowerCase());
       if (!exists) {
         const newDept: Department = {
-          id: `DEP-${Math.floor(100 + Math.random() * 900)}`,
+          id: newId('dep'),
           name: reqDeptName,
           headName: req.employeeName,
-          headAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+          headAvatar: initialsAvatar(req.employeeName),
           color: '#2563EB',
         };
         setDepartments((prev) => [...prev, newDept]);
-        api.createDepartment(newDept).catch((err) =>
-          console.error("Failed to auto-create department via API:", err)
-        );
+        api.createDepartment(newDept).catch(reportSaveError);
       }
     }
 
-    const newEmpId = req.employeeId || `DG-${Math.floor(1000 + Math.random() * 9000)}`;
+    const newEmpId = req.employeeId || nextEmployeeCode(employees);
 
     let emp = employees.find((e) => (e.email || '').toLowerCase() === (req.email || '').toLowerCase() || (req.employeeId && e.id === req.employeeId));
 
@@ -779,8 +712,8 @@ export default function App() {
         designation: req.designation || 'Staff Member',
         dob: req.dob,
         nidNumber: req.nidNumber,
-        phone: '+1 (555) 019-2831',
-        avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+        phone: '',
+        avatar: initialsAvatar(req.employeeName),
         status: 'active',
         employmentType: 'full_time',
         location: 'Headquarters Office',
@@ -811,99 +744,50 @@ export default function App() {
       setEmployees((prev) => prev.map((e) => (e.id === emp!.id ? emp! : e)));
     }
 
-    // Sync employee creation/update with server API
-    api.createEmployee(emp).catch((err) => console.log('API employee sync fallback:', err));
+    // Save the employee first: if the plan's employee limit is reached, stop here.
+    try {
+      const savedEmp = await api.createEmployee(emp);
+      emp = savedEmp;
+      setEmployees((prev) => prev.map((e) => (e.id === savedEmp.id ? savedEmp : e)));
+    } catch (err) {
+      setEmployees((prev) => prev.filter((e) => e.id !== emp!.id || employees.some((x) => x.id === emp!.id)));
+      setRegistrationRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, status: 'pending' } : r)));
+      addToast('error', 'Could not approve request', err instanceof Error ? err.message : 'Please try again.');
+      return { emailSent: false, emailSimulated: false };
+    }
 
-    // Create corresponding active UserAccount
-    const newAccount: UserAccount = {
-      id: `USR-${Math.floor(7000 + Math.random() * 1000)}`,
-      email: req.email,
-      password: autoGeneratedPassword,
-      name: req.employeeName,
-      role: 'employee',
-      employeeId: emp.id,
-      status: 'active',
-      avatar: emp.avatar,
-      createdAt: new Date().toISOString().split('T')[0],
-    };
-
-    setUserAccounts((prev) => [...prev, newAccount]);
-
-    // Sync user account creation with server API, then check whether the
-    // welcome email with the temporary password was actually delivered via
-    // Resend or only "simulated" (RESEND_API_KEY not configured on this
-    // deployment) so we can tell the admin the truth instead of always
-    // claiming it was emailed.
+    // Create the login. The server saves it first and only then emails the password.
     let emailSent = false;
     let emailSimulated = false;
     try {
-      const res = await fetch('/api/user-accounts', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: JSON.stringify({ ...newAccount, password: autoGeneratedPassword }),
+      const res = await api.createUserAccount({
+        email: req.email,
+        password: autoGeneratedPassword,
+        name: req.employeeName,
+        role: 'employee',
+        employeeId: emp.id,
+        avatar: emp.avatar,
       });
-      const result = await res.json().catch(() => null);
-      emailSent = !!result?.emailSent;
-      emailSimulated = !!result?.emailSimulated;
-
-      // If the server found this email already existed in the DB (from an
-      // earlier attempt) it returns that row's real id instead of inserting
-      // a new one. Swap our optimistic local id for the real one so future
-      // Delete/Edit calls for this account actually hit the right DB row.
-      if (result?.data?.id && result.data.id !== newAccount.id) {
-        const realId = result.data.id;
-        setUserAccounts((prev) =>
-          prev.map((a) => (a.id === newAccount.id ? { ...a, id: realId } : a))
-        );
-        newAccount.id = realId;
-        // Bring the recovered row's fields in line with this approval
-        // (it may still hold stale data — e.g. a different employeeId —
-        // from whichever earlier attempt originally created it).
-        fetch(`/api/user-accounts/${realId}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-          },
-          body: JSON.stringify({ name: req.employeeName, role: 'employee', status: 'active' }),
-        }).catch((err) => console.log('Recovered account sync fallback:', err));
-      }
-
-      if (emailSimulated) {
-        addToast(
-          'warning',
-          'Email Not Actually Sent',
-          `RESEND_API_KEY is not configured on the server, so no real email went to ${req.email}. Temporary password: ${autoGeneratedPassword} — please share it manually.`
-        );
-      } else if (emailSent) {
-        addToast('success', 'Welcome Email Sent', `Login credentials were emailed to ${req.email}.`);
+      const created = res.data;
+      setUserAccounts((prev) => [created, ...prev.filter((a) => a.id !== created.id)]);
+      emailSent = res.emailSent;
+      emailSimulated = res.emailSimulated;
+      if (emailSent) {
+        addToast('success', 'Welcome email sent', `Login details were emailed to ${req.email}.`);
       } else {
-        addToast(
-          'warning',
-          'Email Delivery Failed',
-          `Could not confirm delivery to ${req.email}. Temporary password: ${autoGeneratedPassword} — please share it manually.`
-        );
+        addToast('warning', 'Email not sent', `Please share this temporary password with ${req.employeeName}: ${res.temporaryPassword || autoGeneratedPassword}`);
       }
     } catch (err) {
-      console.log('API user account sync fallback:', err);
+      setRegistrationRequests((prev) => prev.map((r) => (r.id === req.id ? { ...r, status: 'pending' } : r)));
+      addToast('error', 'Could not create login', err instanceof Error ? err.message : 'Please try again.');
+      return { emailSent: false, emailSimulated: false };
     }
 
-    // Update registration request on server API
-    fetch(`/api/registration-requests/${req.id}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-      },
-      body: JSON.stringify({ status: 'approved', autoGeneratedPassword }),
-    }).catch((err) => console.log('API request status update fallback:', err));
+    api.updateRegistrationRequest(req.id, { status: 'approved' }).catch(() => {});
 
     // Audit Log
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -928,16 +812,10 @@ export default function App() {
     setRegistrationRequests((prev) => prev.filter((r) => r.id !== reqId));
 
     // Call DELETE API endpoint
-    fetch(`/api/registration-requests/${reqId}`, {
-      method: 'DELETE',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-      },
-    }).catch((err) => console.log('API reject request delete fallback:', err));
+    api.deleteRegistrationRequest(reqId).catch(() => {});
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -973,23 +851,21 @@ export default function App() {
     }
 
     const newDept: Department = {
-      id: `DEP-${Math.floor(100 + Math.random() * 900)}`,
+      id: newId('dep'),
       name: nameTrim,
       description: deptData.description,
       headName: deptData.headName || 'Unassigned',
       headAvatar:
         deptData.headAvatar ||
-        'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+        DEFAULT_AVATAR,
       color: deptData.color,
     };
 
     setDepartments((prev) => [...prev, newDept]);
-    api.createDepartment(newDept).catch((err) =>
-      console.error('Failed to create department via API:', err)
-    );
+    api.createDepartment(newDept).catch(reportSaveError);
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -1037,12 +913,10 @@ export default function App() {
           d.name.toLowerCase() !== deptToDelete.name.toLowerCase()
       )
     );
-    api.deleteDepartment(deptToDelete.id).catch((err) =>
-      console.error('Failed to delete department via API:', err)
-    );
+    api.deleteDepartment(deptToDelete.id).catch(reportSaveError);
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -1219,7 +1093,7 @@ export default function App() {
     const { workHours, overtimeHours } = calculateWorkHours(data.entryTime, data.exitTime);
 
     const newRecord: AttendanceRecord = {
-      id: existingIndex >= 0 ? attendance[existingIndex].id : `ATT-${Math.floor(9000 + Math.random() * 1000)}`,
+      id: existingIndex >= 0 ? attendance[existingIndex].id : newId('att'),
       employeeId: emp.id,
       employeeName: emp.name,
       employeeAvatar: emp.avatar,
@@ -1242,19 +1116,15 @@ export default function App() {
         copy[existingIndex] = newRecord;
         return copy;
       });
-      api.updateAttendance(newRecord.id, newRecord).catch((err) =>
-        console.error('Failed to update attendance on server DB:', err)
-      );
+      api.updateAttendance(newRecord.id, newRecord).catch(reportSaveError);
     } else {
       setAttendance((prev) => [newRecord, ...prev]);
-      api.createAttendance(newRecord).catch((err) =>
-        console.error('Failed to create attendance on server DB:', err)
-      );
+      api.createAttendance(newRecord).catch(reportSaveError);
     }
 
     // Create Audit Log
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'User',
       actorRole: currentUser?.role || 'employee',
@@ -1293,7 +1163,7 @@ export default function App() {
     const initialLeaveStatus = currentUser?.role === 'employee' ? 'pending' : 'approved';
 
     const newLeave: LeaveRequest = {
-      id: `LR-${Math.floor(3000 + Math.random() * 1000)}`,
+      id: newId('lr'),
       employeeId: emp.id,
       employeeName: emp.name,
       employeeAvatar: emp.avatar,
@@ -1311,9 +1181,7 @@ export default function App() {
     const updatedList = [newLeave, ...leaveRequests];
     setLeaveRequests(updatedList);
 
-    api.createLeaveRequest(newLeave).catch((err) =>
-      console.error('Failed to save leave request to server DB:', err)
-    );
+    api.createLeaveRequest(newLeave).catch(reportSaveError);
 
     if (initialLeaveStatus === 'approved') {
       setEmployees((prev) =>
@@ -1328,7 +1196,7 @@ export default function App() {
     }
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'User',
       actorRole: currentUser?.role || 'employee',
@@ -1389,12 +1257,10 @@ export default function App() {
       status: data.status,
       reason: data.reason,
       notes: `Overridden by ${currentUser?.name}: ${data.reason}`,
-    }).catch((err) =>
-      console.error('Failed to update attendance correction on server DB:', err)
-    );
+    }).catch(reportSaveError);
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Admin',
       actorRole: currentUser?.role || 'admin',
@@ -1446,7 +1312,7 @@ export default function App() {
         serverLog && serverLog.action
           ? serverLog
           : {
-              id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+              id: newId('aud'),
               timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
               administrator: currentUser.name,
               actorRole: currentUser.role,
@@ -1500,12 +1366,10 @@ export default function App() {
       prev.map((l) => (l.employeeId === employeeId ? { ...l, employeeAvatar: newAvatarUrl } : l))
     );
 
-    api.updateEmployee(employeeId, { avatar: newAvatarUrl }).catch((err) =>
-      console.error('Failed to update employee avatar on server DB:', err)
-    );
+    api.updateEmployee(employeeId, { avatar: newAvatarUrl }).catch(reportSaveError);
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'User',
       actorRole: currentUser?.role || 'employee',
@@ -1540,7 +1404,7 @@ export default function App() {
     }
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -1571,7 +1435,7 @@ export default function App() {
     }
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'Super Admin',
       actorRole: currentUser?.role || 'super_admin',
@@ -1595,9 +1459,7 @@ export default function App() {
       setEmployees((prev) => [newEmp, ...prev.filter((e) => e.id !== newEmp.id)]);
       addToast('success', 'Employee Onboarded', `${newEmp.name} added to ${newEmp.department} and saved to database.`);
     } catch (err: any) {
-      console.error('Failed to create employee in database:', err);
-      setEmployees((prev) => [empData, ...prev.filter((e) => e.id !== empData.id)]);
-      addToast('warning', 'Saved Locally', `Added ${empData.name}. (Database sync notice: ${err.message || 'Saved to client state'})`);
+      addToast('error', 'Employee not added', err?.message || 'Please try again.');
     }
   };
 
@@ -1612,7 +1474,7 @@ export default function App() {
       setLeavePolicies(updatedPolicies);
 
       const newLog: AuditLog = {
-        id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+        id: newId('aud'),
         timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
         administrator: currentUser?.name || 'Super Admin',
         actorRole: currentUser?.role || 'super_admin',
@@ -1651,12 +1513,10 @@ export default function App() {
       })
     );
 
-    api.updateEmployee(employeeId, { leaveUsed: newLeaveUsed }).catch((err) =>
-      console.error('Failed to update employee leave balance on server DB:', err)
-    );
+    api.updateEmployee(employeeId, { leaveUsed: newLeaveUsed }).catch(reportSaveError);
 
     const newLog: AuditLog = {
-      id: `AUD-${Math.floor(8800 + Math.random() * 1000)}`,
+      id: newId('aud'),
       timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
       administrator: currentUser?.name || 'User',
       actorRole: currentUser?.role || 'admin',
@@ -1689,16 +1549,14 @@ export default function App() {
     setEmployees((prev) =>
       prev.map((e) => (e.id === employeeId ? { ...e, leaveUsed: usedByType } : e))
     );
-    api.updateEmployee(employeeId, { leaveUsed: usedByType }).catch((err) =>
-      console.error('Failed to persist recomputed leave balance:', err)
-    );
+    api.updateEmployee(employeeId, { leaveUsed: usedByType }).catch(reportSaveError);
   };
 
   /** Admin adds a past/present leave record directly to an employee's history. */
   const handleAddLeaveRecord = (record: Omit<LeaveRequest, 'id' | 'employeeName' | 'employeeAvatar' | 'department' | 'appliedDate'> & { employeeId: string }) => {
     const emp = employees.find((e) => e.id === record.employeeId);
     const newLeave: LeaveRequest = {
-      id: `LV-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`,
+      id: newId('lv'),
       employeeId: record.employeeId,
       employeeName: emp?.name || record.employeeId,
       employeeAvatar: emp?.avatar || '',
@@ -1708,9 +1566,7 @@ export default function App() {
     };
     const updated = [newLeave, ...leaveRequests];
     setLeaveRequests(updated);
-    api.createLeaveRequest(newLeave).catch((err) =>
-      console.error('Failed to save leave record to server DB:', err)
-    );
+    api.createLeaveRequest(newLeave).catch(reportSaveError);
     recomputeEmployeeLeaveUsed(record.employeeId, updated);
     addToast('success', 'Leave Record Added', `${newLeave.totalDays} day(s) of ${newLeave.leaveType} recorded for ${newLeave.employeeName}.`);
   };
@@ -1720,9 +1576,7 @@ export default function App() {
     const existing = leaveRequests.find((l) => l.id === id);
     const updatedList = leaveRequests.map((l) => (l.id === id ? { ...l, ...updates } : l));
     setLeaveRequests(updatedList);
-    api.updateLeaveRequest(id, updates).catch((err) =>
-      console.error('Failed to update leave record on server DB:', err)
-    );
+    api.updateLeaveRequest(id, updates).catch(reportSaveError);
     if (existing) {
       recomputeEmployeeLeaveUsed(existing.employeeId, updatedList);
     }
@@ -1734,9 +1588,7 @@ export default function App() {
     const existing = leaveRequests.find((l) => l.id === id);
     const updatedList = leaveRequests.filter((l) => l.id !== id);
     setLeaveRequests(updatedList);
-    api.deleteLeaveRequest(id).catch((err) =>
-      console.error('Failed to delete leave record on server DB:', err)
-    );
+    api.deleteLeaveRequest(id).catch(reportSaveError);
     if (existing) {
       recomputeEmployeeLeaveUsed(existing.employeeId, updatedList);
     }
@@ -1744,13 +1596,11 @@ export default function App() {
   };
 
   const handleAddHoliday = (newHoliday: Omit<CompanyHoliday, 'id'>) => {
-    const id = `HOL-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+    const id = newId('hol');
     const fullHoliday: CompanyHoliday = { id, ...newHoliday, source: newHoliday.source ?? 'manual' };
     setHolidays((prev) => [...prev, fullHoliday]);
 
-    api.createHoliday(fullHoliday).catch((err) =>
-      console.error('Failed to save holiday to server DB:', err)
-    );
+    api.createHoliday(fullHoliday).catch(reportSaveError);
 
     addToast('success', 'Holiday Added', `Added "${newHoliday.title}" to company holiday calendar.`);
   };
@@ -1760,9 +1610,7 @@ export default function App() {
       prev.map((h) => (h.id === id ? { ...h, ...updates, source: 'manual', externalId: undefined } : h))
     );
 
-    api.updateHoliday(id, updates).catch((err) =>
-      console.error('Failed to update holiday on server DB:', err)
-    );
+    api.updateHoliday(id, updates).catch(reportSaveError);
 
     addToast('success', 'Holiday Updated', `"${updates.title ?? 'Holiday'}" saved. Government entries become custom when edited.`);
   };
@@ -1781,9 +1629,7 @@ export default function App() {
   const handleDeleteHoliday = (id: string) => {
     setHolidays((prev) => prev.filter((h) => h.id !== id));
 
-    api.deleteHoliday(id).catch((err) =>
-      console.error('Failed to delete holiday from server DB:', err)
-    );
+    api.deleteHoliday(id).catch(reportSaveError);
 
     addToast('warning', 'Holiday Deleted', `Holiday entry removed from calendar.`);
   };
@@ -1818,25 +1664,66 @@ export default function App() {
     }
   }, [activeSection, currentUser]);
 
-  // If user is not logged in, display single Login screen
+  if (isBooting) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="w-10 h-10 rounded-full border-4 border-blue-200 border-t-blue-600 animate-spin" aria-label="Loading" />
+      </div>
+    );
+  }
+
+  const handleLogout = () => {
+    resetSession();
+    addToast('info', 'Signed out', 'You have been signed out.');
+  };
+
+  // Not signed in → login / company signup / request access
   if (!currentUser) {
     return (
-      <LoginView
-        accounts={userAccounts}
-        employees={employees}
-        registrationRequests={registrationRequests}
-        onLoginSuccess={(user, token) => {
-          if (token) {
-            setAuthToken(token);
-          }
-          setCurrentUser(user);
-          loadDatabaseData();
-          setActiveSection('dashboard');
-          addToast('success', 'Authentication Successful', `Welcome back, ${user.name} (${user.role.toUpperCase()})!`);
+      <>
+        <LoginView
+          onSession={async (session, isNewCompany) => {
+            await applySession(session);
+            setActiveSection('dashboard');
+            addToast(
+              'success',
+              isNewCompany ? 'Your company is ready!' : 'Signed in',
+              isNewCompany ? `Welcome to Attendra, ${session.account.name}. Your 14-day free trial has started.` : `Welcome back, ${session.account.name}.`
+            );
+          }}
+        />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </>
+    );
+  }
+
+  // Platform owner → company management panel
+  if (currentUser.role === 'platform_admin') {
+    return (
+      <>
+        <PlatformAdminView currentUser={currentUser} onLogout={handleLogout} onToast={addToast} />
+        <ToastContainer toasts={toasts} onDismiss={removeToast} />
+      </>
+    );
+  }
+
+  // Temporary password → must choose a new one before using the app
+  if (currentUser.mustChangePassword) {
+    return (
+      <ForcePasswordChangeView
+        currentUser={currentUser}
+        onDone={async (account) => {
+          setCurrentUser(account);
+          if (companyAccess.ok) await loadDatabaseData();
         }}
-        onRequestRegistration={handleRequestRegistration}
+        onLogout={handleLogout}
       />
     );
+  }
+
+  // Trial ended / suspended → explain and offer contact
+  if (!companyAccess.ok) {
+    return <CompanyBlockedView company={company} reason={companyAccess.reason} currentUser={currentUser} onLogout={handleLogout} />;
   }
 
   // Data Scoping by Role
@@ -1877,13 +1764,13 @@ export default function App() {
   const selectedEmployeeObj = employees.find((e) => e.id === selectedEmployeeId) || null;
 
   // Real-time calculation for Dashboard Stat Cards
-  const totalEmployeesCount = employees.length || 8;
+  const totalEmployeesCount = employees.filter((e) => e.status !== 'inactive').length;
   const todayDateStr = new Date().toISOString().split('T')[0];
   const todayAttendanceRecords = attendance.filter((a) => a.date === todayDateStr);
 
   const presentCountReal = new Set(
     todayAttendanceRecords
-      .filter((a) => a.status === 'present' || a.status === 'grace_period' || a.status === 'remote')
+      .filter((a) => a.status === 'present' || a.status === 'grace_period' || a.status === 'wfh')
       .map((a) => a.employeeId)
   ).size;
 
@@ -1899,15 +1786,11 @@ export default function App() {
       .map((l) => l.employeeId)
   ).size;
 
-  const displayPresentCount = (todayAttendanceRecords.length > 0 || leaveRequests.length > 0)
-    ? (presentCountReal + lateCountReal)
-    : Math.max(0, totalEmployeesCount - 2);
+  const displayPresentCount = presentCountReal + lateCountReal;
 
   const displayLateCount = lateCountReal;
 
-  const displayLeaveCount = (todayAttendanceRecords.length > 0 || leaveRequests.length > 0)
-    ? leaveCountReal
-    : 2;
+  const displayLeaveCount = leaveCountReal;
 
   const displayAbsentCount = Math.max(0, totalEmployeesCount - displayPresentCount - displayLeaveCount);
 
@@ -1934,11 +1817,8 @@ export default function App() {
           currentUser={currentUser}
           isMobileOpen={isMobileSidebarOpen}
           onMobileClose={() => setIsMobileSidebarOpen(false)}
-          onLogout={() => {
-            setAuthToken(null);
-            setCurrentUser(null);
-            addToast('info', 'Signed Out', 'Your session has ended safely.');
-          }}
+          onLogout={handleLogout}
+          companyName={company?.name}
         />
 
         {/* Right Main Content Area */}
@@ -1958,22 +1838,18 @@ export default function App() {
             onMarkNotificationRead={(id) => {
               setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
               // Persist to server so the read state survives a page reload.
-              api.markNotificationRead(id).catch((err) => console.log('Mark notification read fallback:', err));
+              api.markNotificationRead(id).catch(reportSaveError);
             }}
             onMarkAllNotificationsRead={() => {
               setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
-              api.markNotificationsRead().catch((err) => console.log('Mark all notifications read fallback:', err));
+              api.markNotificationsRead().catch(reportSaveError);
             }}
             onSelectNotification={(notif) => setSelectedNotification(notif)}
             employees={scopedEmployees}
             onSelectEmployee={(empId) => setSelectedEmployeeId(empId)}
             onNavigate={handleSelectSection}
             onOpenChangePassword={() => setIsChangePasswordModalOpen(true)}
-            onLogout={() => {
-              setAuthToken(null);
-              setCurrentUser(null);
-              addToast('info', 'Signed Out', 'Session terminated.');
-            }}
+            onLogout={handleLogout}
           />
 
           {/* Dynamic Section Renderer */}
@@ -2004,7 +1880,7 @@ export default function App() {
                     onApprove={(req, customPass) =>
                       handleAcceptRegistration(
                         req,
-                        customPass || `Pass-${Math.floor(100000 + Math.random() * 900000)}#`
+                        customPass || ''
                       )
                     }
                     onReject={handleRejectRegistration}
@@ -2014,7 +1890,7 @@ export default function App() {
 
                 {/* Executive Top Stat Cards */}
                 <StatCards
-                  presentCount={isEmployeeRole ? (scopedAttendance.length > 0 ? 1 : 0) : displayPresentCount}
+                  presentCount={isEmployeeRole ? new Set(scopedAttendance.filter((a) => a.date.startsWith(todayDateStr.slice(0, 7))).map((a) => a.date)).size : displayPresentCount}
                   lateCount={isEmployeeRole ? 0 : displayLateCount}
                   absentCount={isEmployeeRole ? 0 : displayAbsentCount}
                   leaveCount={isEmployeeRole ? (scopedLeaveRequests.some(l => l.status === 'approved') ? 1 : 0) : displayLeaveCount}
@@ -2154,9 +2030,7 @@ export default function App() {
                     api.updateLeaveRequest(id, {
                       status: 'approved',
                       managerComment: comment,
-                    }).catch((err) =>
-                      console.error('Failed to update approve leave status on server DB:', err)
-                    );
+                    }).catch(reportSaveError);
                     const target = leaveRequests.find((l) => l.id === id);
                     if (target) recomputeEmployeeLeaveUsed(target.employeeId, updatedList);
                     addToast('success', 'Leave Approved', `Leave application ${id} approved.`);
@@ -2172,9 +2046,7 @@ export default function App() {
                     api.updateLeaveRequest(id, {
                       status: 'rejected',
                       managerComment: comment,
-                    }).catch((err) =>
-                      console.error('Failed to update reject leave status on server DB:', err)
-                    );
+                    }).catch(reportSaveError);
                     const target = leaveRequests.find((l) => l.id === id);
                     if (target) recomputeEmployeeLeaveUsed(target.employeeId, updatedList);
                     addToast('warning', 'Leave Rejected', `Leave application ${id} rejected.`);
@@ -2269,10 +2141,12 @@ export default function App() {
                   onSaveSettings={handleSaveLeavePolicies}
                   onUpdateLatePenaltyRule={(rule) => {
                     setLatePenaltyRule(rule);
+                    api.updateLatePenaltyRule(rule).catch((err) => addToast('error', 'Rule not saved', err.message));
                     addToast('success', 'Late Penalty Rule Updated', `Set threshold to ${rule.threshold} lates/week = ${rule.deductionDays} day deduction.`);
                   }}
                   onUpdateShiftSettings={(settings) => {
                     setShiftSettings(settings);
+                    api.updateShiftSettings(settings).catch((err) => addToast('error', 'Shift settings not saved', err.message));
                     addToast('success', 'Shift Settings Saved', `Office Start: ${settings.officeStartTime} | Late Cutoff: ${settings.lateThresholdTime}`);
                   }}
                   onCreateAccount={handleCreateUserAccount}
@@ -2280,14 +2154,9 @@ export default function App() {
                   onDeleteAccount={handleDeleteUserAccount}
                   onAcceptRegistration={handleAcceptRegistration}
                   onRejectRegistration={handleRejectRegistration}
-                  onResetToDemoData={handleResetToDemoData}
-                  onPasswordChanged={(updatedUser) => {
-                    setUserAccounts((prev) =>
-                      prev.map((acc) => (acc.id === updatedUser.id ? { ...acc, passwordHash: updatedUser.passwordHash } : acc))
-                    );
-                    if (currentUser && currentUser.id === updatedUser.id) {
-                      setCurrentUser((prev) => (prev ? { ...prev, passwordHash: updatedUser.passwordHash } : null));
-                    }
+                  company={company}
+                  onCompanyUpdated={(c) => setCompany(c)}
+                  onPasswordChanged={() => {
                     addToast('success', 'Password Updated', 'Your account password has been changed and securely saved.');
                   }}
                 />
@@ -2328,6 +2197,7 @@ export default function App() {
         isOpen={isAddEmployeeModalOpen}
         onClose={() => setIsAddEmployeeModalOpen(false)}
         onAddEmployee={handleAddEmployee}
+        existingEmployees={employees}
       />
 
       <ManualCorrectionModal

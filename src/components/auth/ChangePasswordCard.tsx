@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { KeyRound, Eye, EyeOff, ShieldCheck, AlertCircle, CheckCircle2, Lock } from 'lucide-react';
-import bcrypt from 'bcryptjs';
+import { api, setAuthToken } from '../../services/api';
 import { UserAccount } from '../../types';
 
 interface ChangePasswordCardProps {
@@ -43,8 +43,8 @@ export const ChangePasswordCard: React.FC<ChangePasswordCardProps> = ({
       return;
     }
 
-    if (newPassword.length < 6) {
-      setErrorMsg('New password must be at least 6 characters long.');
+    if (newPassword.length < 8) {
+      setErrorMsg('New password must be at least 8 characters long.');
       return;
     }
 
@@ -56,82 +56,10 @@ export const ChangePasswordCard: React.FC<ChangePasswordCardProps> = ({
     setIsSubmitting(true);
 
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      const token = authToken || localStorage.getItem('attendra_auth_token');
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      let apiSuccess = false;
-      if (currentUser?.id) {
-        try {
-          const response = await fetch('/api/auth/change-password', {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({
-              currentPassword: currentPassword.trim(),
-              newPassword: newPassword.trim(),
-              userId: currentUser.id,
-            }),
-          });
-
-          const resData = await response.json();
-          if (response.ok && resData.success) {
-            apiSuccess = true;
-          } else if (resData.message) {
-            if (resData.message.toLowerCase().includes('incorrect')) {
-              setErrorMsg('Current password is incorrect');
-              setIsSubmitting(false);
-              return;
-            }
-          }
-        } catch (err) {
-          console.log('Server change password API unreachable, falling back to local verification', err);
-        }
-      }
-
-      // Local / Client fallback if API was offline
-      if (!apiSuccess && currentUser) {
-        const targetAcc = userAccounts.find((a) => a.id === currentUser.id || a.email.toLowerCase() === currentUser.email.toLowerCase()) || currentUser;
-
-        let passwordValid = false;
-
-        if (targetAcc.passwordHash) {
-          try {
-            passwordValid = bcrypt.compareSync(currentPassword.trim(), targetAcc.passwordHash);
-          } catch {
-            passwordValid = false;
-          }
-        } else if (targetAcc.password) {
-          passwordValid = targetAcc.password === currentPassword.trim();
-        } else {
-          // Default initial passwords fallback check
-          if (currentUser.role === 'super_admin' && (currentPassword === 'superadmin' || currentPassword === 'password123')) {
-            passwordValid = true;
-          } else if (currentUser.role === 'admin' && (currentPassword === 'admin' || currentPassword === 'password123')) {
-            passwordValid = true;
-          } else if (currentPassword === 'password123') {
-            passwordValid = true;
-          }
-        }
-
-        if (!passwordValid) {
-          setErrorMsg('Current password is incorrect');
-          setIsSubmitting(false);
-          return;
-        }
-      }
-
-      const hashedNewPassword = bcrypt.hashSync(newPassword.trim(), 10);
-
-      if (currentUser && onPasswordChanged) {
-        onPasswordChanged({
-          ...currentUser,
-          passwordHash: hashedNewPassword,
-        });
-      }
+      const result = await api.changePassword(currentPassword, newPassword);
+      // The server signs out other devices and returns a fresh token for this one.
+      if (result.token) setAuthToken(result.token);
+      if (onPasswordChanged) onPasswordChanged(result.account as UserAccount);
 
       setSuccessMsg('Password updated successfully!');
       setErrorMsg('');
@@ -222,7 +150,7 @@ export const ChangePasswordCard: React.FC<ChangePasswordCardProps> = ({
               type={showNewPassword ? 'text' : 'password'}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
-              placeholder="Enter at least 6 characters"
+              placeholder="Enter at least 8 characters"
               className="w-full pl-3.5 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
               required
             />
