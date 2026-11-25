@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import { Lock, Eye, EyeOff, CheckCircle2, AlertCircle, KeyRound, ShieldCheck, X } from 'lucide-react';
-import bcrypt from 'bcryptjs';
+import { api, setAuthToken } from '../../services/api';
 import { UserAccount } from '../../types';
 
 interface ChangePasswordModalProps {
@@ -62,8 +63,8 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
       return;
     }
 
-    if (newPassword.length < 6) {
-      setErrorMsg('New password must be at least 6 characters long.');
+    if (newPassword.length < 8) {
+      setErrorMsg('New password must be at least 8 characters long.');
       return;
     }
 
@@ -76,84 +77,10 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
 
     try {
       // 1. Try server API call first
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      const token = authToken || localStorage.getItem('attendra_auth_token');
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
-
-      let apiSuccess = false;
-      try {
-        const response = await fetch('/api/auth/change-password', {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            currentPassword: currentPassword.trim(),
-            newPassword: newPassword.trim(),
-            userId: currentUser.id,
-          }),
-        });
-
-        const resData = await response.json();
-        if (response.ok && resData.success) {
-          apiSuccess = true;
-        } else if (resData.message) {
-          if (resData.message.toLowerCase().includes('incorrect')) {
-            setErrorMsg('Current password is incorrect');
-            setIsSubmitting(false);
-            return;
-          }
-        }
-      } catch (err) {
-        console.log('Server change password API unreachable, falling back to local verification', err);
-      }
-
-      // 2. Client-side / local storage fallback validation if API was not triggered or offline
-      if (!apiSuccess) {
-        // Find current user account in state
-        const targetAcc = userAccounts.find((a) => a.id === currentUser.id || a.email.toLowerCase() === currentUser.email.toLowerCase()) || currentUser;
-
-        let passwordValid = false;
-
-        // Verify current password against stored passwordHash or plain password
-        if (targetAcc.passwordHash) {
-          try {
-            passwordValid = bcrypt.compareSync(currentPassword.trim(), targetAcc.passwordHash);
-          } catch {
-            passwordValid = false;
-          }
-        } else if (targetAcc.password) {
-          passwordValid = targetAcc.password === currentPassword.trim();
-        } else {
-          // Default initial passwords fallback check
-          if (currentUser.role === 'super_admin' && (currentPassword === 'superadmin' || currentPassword === 'password123')) {
-            passwordValid = true;
-          } else if (currentUser.role === 'admin' && (currentPassword === 'admin' || currentPassword === 'password123')) {
-            passwordValid = true;
-          } else if (currentPassword === 'password123') {
-            passwordValid = true;
-          }
-        }
-
-        if (!passwordValid) {
-          setErrorMsg('Current password is incorrect');
-          setIsSubmitting(false);
-          return;
-        }
-      }
-
-      // Hash the new password securely
-      const hashedNewPassword = bcrypt.hashSync(newPassword.trim(), 10);
-
-      const updatedUser: UserAccount = {
-        ...currentUser,
-        passwordHash: hashedNewPassword,
-      };
-
-      // Notify parent to save updated password in state & localStorage
-      onPasswordChanged(updatedUser);
+      const result = await api.changePassword(currentPassword, newPassword);
+      // The server signs out other devices and returns a fresh token for this one.
+      if (result.token) setAuthToken(result.token);
+      onPasswordChanged(result.account as UserAccount);
 
       setSuccessMsg('Password updated successfully!');
       setErrorMsg('');
@@ -199,7 +126,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
         <div className="p-3 bg-slate-50 border border-slate-200/80 rounded-2xl flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <img
-              src={currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+              src={currentUser.avatar || DEFAULT_AVATAR}
               alt={currentUser.name}
               className="w-8 h-8 rounded-full object-cover border border-slate-300"
             />
@@ -264,7 +191,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 type={showNewPassword ? 'text' : 'password'}
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
-                placeholder="Enter at least 6 characters"
+                placeholder="Enter at least 8 characters"
                 className="w-full pl-3.5 pr-10 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl font-medium text-slate-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all"
                 required
               />
@@ -276,7 +203,7 @@ export const ChangePasswordModal: React.FC<ChangePasswordModalProps> = ({
                 {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-[10px] text-slate-400 mt-1">Must be at least 6 characters long.</p>
+            <p className="text-[10px] text-slate-400 mt-1">Must be at least 8 characters long.</p>
           </div>
 
           {/* Field 3: Confirm New Password */}

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import {
   Search,
   Bell,
@@ -352,7 +353,7 @@ export const Header: React.FC<HeaderProps> = ({
             className="flex items-center gap-2 px-3 py-1.5 bg-slate-100/90 hover:bg-slate-200/80 border border-slate-200/80 rounded-2xl text-xs font-bold text-slate-800 transition-colors cursor-pointer"
           >
             <img
-              src={currentUser.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200'}
+              src={currentUser.avatar || DEFAULT_AVATAR}
               alt={currentUser.name}
               className="w-5 h-5 rounded-full object-cover shrink-0 border border-slate-300"
             />

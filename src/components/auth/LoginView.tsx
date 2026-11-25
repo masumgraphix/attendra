@@ -1,761 +1,363 @@
 import React, { useState } from 'react';
-import { UserAccount, Employee, RegistrationRequest } from '../../types';
 import {
-  Clock,
-  ShieldCheck,
-  User,
-  Lock,
-  Mail,
-  ArrowRight,
-  KeyRound,
-  AlertCircle,
-  Sparkles,
-  CheckCircle2,
-  UserPlus,
-  BadgeCheck,
-  X,
-  FileCheck2,
-  Eye,
-  EyeOff,
+  Clock, Mail, Lock, Eye, EyeOff, AlertCircle, CheckCircle2, Building2, User, Phone, ArrowLeft, KeyRound, UserPlus, Sparkles,
 } from 'lucide-react';
+import { api, SessionResponse } from '../../services/api';
 
 interface LoginViewProps {
-  accounts: UserAccount[];
-  employees: Employee[];
-  registrationRequests: RegistrationRequest[];
-  onLoginSuccess: (account: UserAccount, token?: string) => void;
-  onRequestRegistration: (req: {
-    employeeName: string;
-    employeeId: string;
-    email: string;
-    department: string;
-    designation: string;
-    dob: string;
-    nidNumber: string;
-    requestedRole: 'employee';
-  }) => void;
+  onSession: (session: SessionResponse, isNewCompany: boolean) => void | Promise<void>;
 }
 
-export const LoginView: React.FC<LoginViewProps> = ({
-  accounts = [],
-  employees = [],
-  registrationRequests = [],
-  onLoginSuccess,
-  onRequestRegistration,
-}) => {
+type Mode = 'login' | 'signup' | 'request';
+
+const inputCls =
+  'w-full pl-10 pr-3.5 py-2.5 text-sm bg-slate-50 border border-slate-200 rounded-2xl text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all';
+
+const Field: React.FC<{ icon: React.ReactNode; label: string; children: React.ReactNode }> = ({ icon, label, children }) => (
+  <label className="block">
+    <span className="text-xs font-bold text-slate-700">{label}</span>
+    <div className="relative mt-1">
+      <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">{icon}</span>
+      {children}
+    </div>
+  </label>
+);
+
+const ErrorBox: React.FC<{ msg: string }> = ({ msg }) =>
+  msg ? (
+    <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-2xl text-xs font-bold flex items-start gap-2" role="alert">
+      <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" /> <span>{msg}</span>
+    </div>
+  ) : null;
+
+export const LoginView: React.FC<LoginViewProps> = ({ onSession }) => {
+  const initialMode: Mode = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('signup') ? 'signup' : 'login';
+  const initialCode = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('company') || '' : '';
+  const [mode, setMode] = useState<Mode>(initialCode ? 'request' : initialMode);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // login
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [showNewResetPassword, setShowNewResetPassword] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Forgot Password Modal
-  const [showForgotPasswordModal, setShowForgotPasswordModal] = useState(false);
+  // signup
+  const [companyName, setCompanyName] = useState('');
+  const [ownerName, setOwnerName] = useState('');
+  const [phone, setPhone] = useState('');
+
+  // request access
+  const [companyCode, setCompanyCode] = useState(initialCode);
+  const [companyFound, setCompanyFound] = useState<string>('');
+  const [regName, setRegName] = useState('');
+  const [regEmail, setRegEmail] = useState('');
+  const [regEmployeeId, setRegEmployeeId] = useState('');
+  const [regDepartment, setRegDepartment] = useState('');
+  const [regDesignation, setRegDesignation] = useState('');
+  const [regSent, setRegSent] = useState('');
+
+  // forgot password
+  const [forgotOpen, setForgotOpen] = useState(false);
+  const [forgotStep, setForgotStep] = useState<'email' | 'code' | 'done'>('email');
   const [forgotEmail, setForgotEmail] = useState('');
   const [resetCode, setResetCode] = useState('');
-  const [newResetPassword, setNewResetPassword] = useState('');
-  const [forgotStep, setForgotStep] = useState<'email' | 'code' | 'done'>('email');
+  const [resetPassword, setResetPassword] = useState('');
   const [forgotError, setForgotError] = useState('');
-  const [isSendingForgot, setIsSendingForgot] = useState(false);
+  const [forgotBusy, setForgotBusy] = useState(false);
 
-  // Registration Request Modal State
-  const [showRegisterModal, setShowRegisterModal] = useState(false);
-  const [regName, setRegName] = useState('');
-  const [regEmployeeId, setRegEmployeeId] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regDepartment, setRegDepartment] = useState('Engineering');
-  const [regDesignation, setRegDesignation] = useState('');
-  const [regDob, setRegDob] = useState('');
-  const [regNidNumber, setRegNidNumber] = useState('');
-  const [regError, setRegError] = useState('');
-  const [regSuccess, setRegSuccess] = useState(false);
+  const switchMode = (m: Mode) => {
+    setMode(m);
+    setError('');
+  };
 
-  /**
-   * PROTOTYPE AUTHENTICATION WARNING:
-   * Client-side auth and mock account records are designed for local prototyping/previews ONLY.
-   * In a production application, passwords must NEVER be validated or stored in client JS bundles.
-   * Authentication MUST be performed against a secure backend service using salted password hashes
-   * (e.g., bcrypt/argon2) with HTTP-only session tokens or JWTs.
-   */
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg('');
-
-    if (!email.trim()) {
-      setErrorMsg('Please enter your work email.');
-      return;
-    }
-
-    if (!password.trim()) {
-      setErrorMsg('Please enter your password.');
-      return;
-    }
-
-    setIsSubmitting(true);
-
+  const run = async (fn: () => Promise<void>) => {
+    setError('');
+    setBusy(true);
     try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: email.trim(), password: password.trim() }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok || !result.success) {
-        setErrorMsg(result.message || 'Authentication failed. Please check your credentials.');
-        return;
-      }
-
-      if (result.token) {
-        localStorage.setItem('attendra_auth_token', result.token);
-      }
-
-      onLoginSuccess(result.account, result.token);
-    } catch {
-      // Offline fallback verification (clears raw password string before passing account)
-      const account = accounts.find(
-        (acc) => (acc.email || '').toLowerCase() === email.trim().toLowerCase()
-      );
-
-      if (!account) {
-        setErrorMsg('Account not found. Please check your email or request account access below.');
-        return;
-      }
-
-      if (account.status === 'inactive') {
-        setErrorMsg('This account has been deactivated by Super Admin. Please contact HR.');
-        return;
-      }
-
-      if (account.password && account.password !== password.trim()) {
-        setErrorMsg('Incorrect password. Please verify your credentials or reset password.');
-        return;
-      }
-
-      const { password: _p, ...safeAccount } = account;
-      onLoginSuccess(safeAccount as UserAccount);
+      await fn();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Something went wrong. Please try again.');
     } finally {
-      setIsSubmitting(false);
+      setBusy(false);
     }
   };
 
-  const handleQuickLogin = (quickAcc: UserAccount) => {
-    setEmail(quickAcc.email);
-    setPassword(quickAcc.password || 'password123');
-    setErrorMsg('');
-    const { password: _p, ...safeAcc } = quickAcc;
-    onLoginSuccess(safeAcc as UserAccount);
-  };
-
-  const handleForgotPasswordSubmit = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!forgotEmail.trim()) return;
-    setForgotError('');
-    setIsSendingForgot(true);
-
-    try {
-      const res = await fetch('/api/auth/forgot-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: forgotEmail.trim() }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setForgotError(data.message || 'Failed to send verification code.');
-        return;
-      }
-      setForgotStep('code');
-    } catch {
-      setForgotError('Network error. Unable to send verification email.');
-    } finally {
-      setIsSendingForgot(false);
-    }
-  };
-
-  const handleResetPasswordConfirm = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetCode.trim() || !newResetPassword.trim()) {
-      setForgotError('Please enter both the verification code and your new password.');
-      return;
-    }
-    setForgotError('');
-    setIsSendingForgot(true);
-
-    try {
-      const res = await fetch('/api/auth/reset-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: forgotEmail.trim(),
-          code: resetCode.trim(),
-          newPassword: newResetPassword.trim(),
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        setForgotError(data.message || 'Failed to reset password. Please check your verification code.');
-        return;
-      }
-      setForgotStep('done');
-    } catch {
-      setForgotError('Network error. Unable to complete password reset.');
-    } finally {
-      setIsSendingForgot(false);
-    }
-  };
-
-  const handleRegisterSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setRegError('');
-
-    if (!regName.trim() || !regEmail.trim() || !regEmployeeId.trim() || !regDesignation.trim() || !regDob.trim() || !regNidNumber.trim()) {
-      setRegError('Please fill in all required fields including Employee ID, Date of Birth, and NID Number.');
-      return;
-    }
-
-    let formattedEmpId = regEmployeeId.trim();
-    if (/^\d+$/.test(formattedEmpId)) {
-      formattedEmpId = `DG-${formattedEmpId}`;
-    }
-
-    // Check if account already exists
-    const existingAccount = accounts.find(
-      (a) => (a.email || '').toLowerCase() === regEmail.trim().toLowerCase()
-    );
-    if (existingAccount) {
-      setRegError(`An account with email "${regEmail.trim()}" is already active. Please sign in directly.`);
-      return;
-    }
-
-    // Check if request is already pending
-    const existingPending = registrationRequests.find(
-      (r) => (r.email || '').toLowerCase() === regEmail.trim().toLowerCase() && r.status === 'pending'
-    );
-    if (existingPending) {
-      setRegError(`A registration request for "${regEmail.trim()}" is already pending Super Admin approval.`);
-      return;
-    }
-
-    onRequestRegistration({
-      employeeName: regName.trim(),
-      employeeId: formattedEmpId,
-      email: regEmail.trim(),
-      department: regDepartment,
-      designation: regDesignation.trim(),
-      dob: regDob,
-      nidNumber: regNidNumber.trim(),
-      requestedRole: 'employee',
+    run(async () => {
+      const session = await api.login(email.trim(), password);
+      await onSession(session, false);
     });
-
-    setRegSuccess(true);
   };
+
+  const handleSignup = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (password.length < 8) return setError('Password must be at least 8 characters.');
+    run(async () => {
+      const session = await api.signup({ companyName: companyName.trim(), name: ownerName.trim(), email: email.trim(), password, phone: phone.trim() });
+      await onSession(session, true);
+    });
+  };
+
+  const checkCompanyCode = async () => {
+    setCompanyFound('');
+    if (!companyCode.trim()) return;
+    try {
+      const c = await api.lookupCompany(companyCode);
+      setCompanyFound(c.name);
+    } catch {
+      setCompanyFound('');
+      setError('No company found with this code. Please check with your HR admin.');
+    }
+  };
+
+  const handleRequest = (e: React.FormEvent) => {
+    e.preventDefault();
+    run(async () => {
+      const r = await api.requestAccess({
+        companyCode: companyCode.trim(),
+        employeeName: regName.trim(),
+        email: regEmail.trim(),
+        employeeId: regEmployeeId.trim() || undefined,
+        department: regDepartment.trim(),
+        designation: regDesignation.trim(),
+      });
+      setRegSent(r.companyName);
+    });
+  };
+
+  const sendResetCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    setForgotBusy(true);
+    try {
+      await api.forgotPassword(forgotEmail.trim());
+      setForgotStep('code');
+    } catch (err) {
+      setForgotError(err instanceof Error ? err.message : 'Could not send the code.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
+
+  const submitReset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setForgotError('');
+    if (resetPassword.length < 8) return setForgotError('Password must be at least 8 characters.');
+    setForgotBusy(true);
+    try {
+      await api.resetPassword(forgotEmail.trim(), resetCode.trim(), resetPassword);
+      setForgotStep('done');
+    } catch (err) {
+      setForgotError(err instanceof Error ? err.message : 'Could not reset the password.');
+    } finally {
+      setForgotBusy(false);
+    }
+  };
+
+  const closeForgot = () => {
+    setForgotOpen(false);
+    setForgotStep('email');
+    setResetCode('');
+    setResetPassword('');
+    setForgotError('');
+  };
+
+  const passwordInput = (autoComplete: string) => (
+    <Field icon={<Lock className="w-4 h-4" />} label="Password">
+      <input
+        type={showPassword ? 'text' : 'password'}
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        placeholder={mode === 'signup' ? 'At least 8 characters' : 'Your password'}
+        autoComplete={autoComplete}
+        className={`${inputCls} pr-10`}
+        required
+      />
+      <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer" aria-label={showPassword ? 'Hide password' : 'Show password'}>
+        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+      </button>
+    </Field>
+  );
+
+  const submitBtn = (label: string) => (
+    <button
+      type="submit"
+      disabled={busy}
+      className="w-full py-3 rounded-2xl bg-gradient-to-r from-blue-600 via-indigo-600 to-fuchsia-600 text-white text-sm font-extrabold shadow-lg shadow-indigo-500/30 hover:opacity-95 disabled:opacity-60 transition cursor-pointer"
+    >
+      {busy ? 'Please wait…' : label}
+    </button>
+  );
 
   return (
-    <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4 relative overflow-hidden font-sans">
-      {/* Background Decorative Blobs */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/20 rounded-full blur-3xl pointer-events-none animate-pulse"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl pointer-events-none animate-pulse" style={{ animationDelay: '1s' }}></div>
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 relative overflow-hidden font-sans">
+      <div className="absolute -top-24 -left-24 w-[28rem] h-[28rem] bg-blue-600/30 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute bottom-0 right-0 w-[30rem] h-[30rem] bg-fuchsia-600/25 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-1/2 left-1/2 w-72 h-72 bg-amber-400/10 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="w-full max-w-md bg-white/95 backdrop-blur-2xl border border-slate-200/80 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
-        {/* Brand Header */}
+      <div className="w-full max-w-md bg-white/95 backdrop-blur-2xl border border-white/40 rounded-3xl p-8 shadow-2xl relative z-10 space-y-6">
         <div className="text-center space-y-2">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 text-white shadow-lg shadow-blue-500/30 mb-2">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-fuchsia-600 text-white shadow-lg shadow-indigo-500/30">
             <Clock className="w-7 h-7 stroke-[2.5]" />
           </div>
-          <div className="flex items-center justify-center gap-2">
-            <h1 className="text-2xl font-black tracking-tight text-slate-900">Attendra</h1>
-            <span className="px-2 py-0.5 text-[10px] font-extrabold uppercase tracking-widest bg-blue-100 text-blue-700 rounded-md">
-              Portal
-            </span>
-          </div>
+          <h1 className="text-2xl font-black tracking-tight text-slate-900">Attendra</h1>
           <p className="text-xs text-slate-500 font-medium">
-            Role-Based Attendance & HR Governance System
+            {mode === 'login' && 'Attendance, leave & HR for your whole team'}
+            {mode === 'signup' && 'Start your 14-day free trial — no card needed'}
+            {mode === 'request' && 'Ask your company admin for access'}
           </p>
         </div>
 
-        {/* Quick Switch Test Bar (Internal Testing Only - Disabled in Production) */}
-        {import.meta.env.VITE_SHOW_DEMO_LOGIN === 'true' && (
-          <div className="bg-slate-50 border border-slate-200/90 rounded-2xl p-3.5 space-y-2">
-            <div className="flex items-center justify-between text-[11px] font-extrabold text-slate-700">
-              <span className="flex items-center gap-1 text-purple-700">
-                <Sparkles className="w-3.5 h-3.5" />
-                Demo Login
-              </span>
-              <span className="text-[10px] text-slate-400 font-normal">Internal Mode</span>
-            </div>
-            <div className="grid grid-cols-1 gap-1.5">
-              {accounts.map((acc) => {
-                let badgeColor = 'bg-blue-50 text-blue-700 border-blue-200';
-                let roleLabel = 'Employee';
-                if (acc.role === 'super_admin') {
-                  badgeColor = 'bg-purple-50 text-purple-700 border-purple-200';
-                  roleLabel = 'Super Admin';
-                } else if (acc.role === 'admin') {
-                  badgeColor = 'bg-indigo-50 text-indigo-700 border-indigo-200';
-                  roleLabel = 'Admin (HR)';
-                }
-
-                return (
-                  <button
-                    key={acc.id}
-                    type="button"
-                    onClick={() => handleQuickLogin(acc)}
-                    className="w-full flex items-center justify-between p-2.5 rounded-xl bg-white border border-slate-200/80 hover:border-blue-400 hover:shadow-xs transition-all text-left text-xs cursor-pointer group"
-                  >
-                    <div className="flex items-center gap-2.5 truncate">
-                      <img src={acc.avatar} alt={acc.name} className="w-7 h-7 rounded-full object-cover shrink-0" />
-                      <div className="truncate">
-                        <div className="flex items-center gap-1.5">
-                          <span className="font-bold text-slate-800 group-hover:text-blue-600 transition-colors">
-                            Login as {roleLabel}
-                          </span>
-                          <span className={`px-1.5 py-0.2 text-[8px] font-black rounded-md border shrink-0 ${badgeColor}`}>
-                            {acc.name}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-3.5 h-3.5 text-slate-300 group-hover:text-blue-600 transition-colors shrink-0 ml-1" />
-                  </button>
-                );
-              })}
-            </div>
+        {mode !== 'request' && (
+          <div className="grid grid-cols-2 p-1 bg-slate-100 rounded-2xl text-xs font-bold">
+            <button type="button" onClick={() => switchMode('login')} className={`py-2 rounded-xl transition cursor-pointer ${mode === 'login' ? 'bg-white shadow text-slate-900' : 'text-slate-500'}`}>
+              Sign in
+            </button>
+            <button type="button" onClick={() => switchMode('signup')} className={`py-2 rounded-xl transition cursor-pointer ${mode === 'signup' ? 'bg-white shadow text-slate-900' : 'text-slate-500'}`}>
+              Create company
+            </button>
           </div>
         )}
 
-        {/* Login Form */}
-        <form onSubmit={handleLogin} className="space-y-4">
-          {errorMsg && (
-            <div className="p-3 bg-rose-50 border border-rose-200/80 rounded-2xl flex items-start gap-2.5 text-xs text-rose-800 font-semibold animate-fade-in">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
-            </div>
-          )}
+        <ErrorBox msg={error} />
 
-          <div className="space-y-1">
-            <label className="text-xs font-bold text-slate-700 block">Work Email</label>
-            <div className="relative">
-              <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="name@company.com"
-                className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                required
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <div className="flex items-center justify-between">
-              <label className="text-xs font-bold text-slate-700">Password</label>
-              <button
-                type="button"
-                onClick={() => {
-                  setForgotEmail(email);
-                  setResetCode('');
-                  setNewResetPassword('');
-                  setForgotError('');
-                  setForgotStep('email');
-                  setShowForgotPasswordModal(true);
-                }}
-                className="text-[11px] font-bold text-blue-600 hover:text-blue-700 hover:underline"
-              >
+        {mode === 'login' && (
+          <form onSubmit={handleLogin} className="space-y-4">
+            <Field icon={<Mail className="w-4 h-4" />} label="Work email">
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="username" className={inputCls} required />
+            </Field>
+            {passwordInput('current-password')}
+            <div className="flex justify-end">
+              <button type="button" onClick={() => { setForgotEmail(email); setForgotOpen(true); }} className="text-xs font-bold text-blue-600 hover:underline cursor-pointer">
                 Forgot password?
               </button>
             </div>
-            <div className="relative">
-              <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            {submitBtn('Sign in')}
+            <button type="button" onClick={() => switchMode('request')} className="w-full flex items-center justify-center gap-2 py-2.5 rounded-2xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer">
+              <UserPlus className="w-4 h-4" /> I'm an employee — request access
+            </button>
+          </form>
+        )}
+
+        {mode === 'signup' && (
+          <form onSubmit={handleSignup} className="space-y-4">
+            <Field icon={<Building2 className="w-4 h-4" />} label="Company name">
+              <input value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="e.g. Masum Graphix Ltd." className={inputCls} required />
+            </Field>
+            <Field icon={<User className="w-4 h-4" />} label="Your name">
+              <input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} placeholder="Full name" autoComplete="name" className={inputCls} required />
+            </Field>
+            <Field icon={<Mail className="w-4 h-4" />} label="Work email">
+              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@company.com" autoComplete="email" className={inputCls} required />
+            </Field>
+            <Field icon={<Phone className="w-4 h-4" />} label="Phone (optional)">
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="01XXXXXXXXX" autoComplete="tel" className={inputCls} />
+            </Field>
+            {passwordInput('new-password')}
+            {submitBtn('Start free trial')}
+            <p className="text-[11px] text-slate-500 text-center flex items-center justify-center gap-1">
+              <Sparkles className="w-3.5 h-3.5 text-amber-500" /> You become the Super Admin of your company.
+            </p>
+          </form>
+        )}
+
+        {mode === 'request' && !regSent && (
+          <form onSubmit={handleRequest} className="space-y-4">
+            <Field icon={<Building2 className="w-4 h-4" />} label="Company code (ask your HR admin)">
               <input
-                type={showPassword ? 'text' : 'password'}
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••"
-                className="w-full pl-10 pr-11 py-2.5 bg-slate-50 border border-slate-200 rounded-2xl text-xs font-semibold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                value={companyCode}
+                onChange={(e) => { setCompanyCode(e.target.value); setCompanyFound(''); }}
+                onBlur={checkCompanyCode}
+                placeholder="e.g. masum-graphix"
+                className={inputCls}
                 required
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-              </button>
+            </Field>
+            {companyFound && (
+              <p className="text-xs font-bold text-emerald-700 flex items-center gap-1.5 -mt-2">
+                <CheckCircle2 className="w-4 h-4" /> {companyFound}
+              </p>
+            )}
+            <Field icon={<User className="w-4 h-4" />} label="Your full name">
+              <input value={regName} onChange={(e) => setRegName(e.target.value)} className={inputCls} autoComplete="name" required />
+            </Field>
+            <Field icon={<Mail className="w-4 h-4" />} label="Work email">
+              <input type="email" value={regEmail} onChange={(e) => setRegEmail(e.target.value)} className={inputCls} autoComplete="email" required />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field icon={<Building2 className="w-4 h-4" />} label="Department">
+                <input value={regDepartment} onChange={(e) => setRegDepartment(e.target.value)} className={inputCls} />
+              </Field>
+              <Field icon={<User className="w-4 h-4" />} label="Designation">
+                <input value={regDesignation} onChange={(e) => setRegDesignation(e.target.value)} className={inputCls} />
+              </Field>
             </div>
+            <Field icon={<KeyRound className="w-4 h-4" />} label="Employee ID (optional)">
+              <input value={regEmployeeId} onChange={(e) => setRegEmployeeId(e.target.value)} className={inputCls} />
+            </Field>
+            {submitBtn('Send request')}
+            <button type="button" onClick={() => switchMode('login')} className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-slate-500 cursor-pointer">
+              <ArrowLeft className="w-3.5 h-3.5" /> Back to sign in
+            </button>
+          </form>
+        )}
+
+        {mode === 'request' && regSent && (
+          <div className="text-center space-y-3">
+            <CheckCircle2 className="w-12 h-12 text-emerald-500 mx-auto" />
+            <p className="text-sm font-bold text-slate-900">Request sent to {regSent}</p>
+            <p className="text-xs text-slate-500">When an admin approves it, your login details will be emailed to <strong>{regEmail}</strong>.</p>
+            <button type="button" onClick={() => { setRegSent(''); switchMode('login'); }} className="text-xs font-bold text-blue-600 cursor-pointer">
+              Back to sign in
+            </button>
           </div>
-
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:opacity-95 text-white font-extrabold text-xs rounded-2xl shadow-lg shadow-blue-500/25 flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-60"
-          >
-            <span>{isSubmitting ? 'Verifying Credentials...' : 'Sign In to Attendra'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </button>
-        </form>
-
-        {/* Employee Registration Request Action */}
-        <div className="p-3 bg-indigo-50/70 border border-indigo-100 rounded-2xl space-y-2 text-center">
-          <p className="text-[11px] font-bold text-indigo-950">
-            Have an Employee ID but no account yet?
-          </p>
-          <button
-            type="button"
-            onClick={() => {
-              setRegName('');
-              setRegEmail('');
-              setRegDepartment('Engineering');
-              setRegDesignation('');
-              setRegError('');
-              setRegSuccess(false);
-              setShowRegisterModal(true);
-            }}
-            className="w-full py-2 px-3 bg-white border border-indigo-200 hover:border-indigo-400 text-indigo-700 font-extrabold text-xs rounded-xl shadow-2xs flex items-center justify-center gap-2 transition-all cursor-pointer"
-          >
-            <UserPlus className="w-4 h-4" />
-            <span>Request Account Access</span>
-          </button>
-        </div>
-
-        <div className="text-center pt-1 border-t border-slate-100">
-          <p className="text-[11px] text-slate-400 font-medium">
-            Protected by Attendra Role Governance Framework v2.4
-          </p>
-        </div>
+        )}
       </div>
 
-      {/* Forgot Password Modal */}
-      {showForgotPasswordModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 w-full max-w-sm shadow-2xl space-y-4 relative">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-                <KeyRound className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-extrabold text-slate-900">Reset Password</h3>
-                <p className="text-[11px] text-slate-500">Attendra Security Desk</p>
-              </div>
-            </div>
-
-            {forgotError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-2 text-xs text-rose-800 font-semibold">
-                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                <span>{forgotError}</span>
-              </div>
-            )}
-
+      {forgotOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
+          <div className="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl space-y-4">
+            <h2 className="text-base font-extrabold text-slate-900">Reset your password</h2>
+            <ErrorBox msg={forgotError} />
             {forgotStep === 'email' && (
-              <form onSubmit={handleForgotPasswordSubmit} className="space-y-3">
-                <p className="text-xs text-slate-600">
-                  Enter your registered work email address below. A 6-digit verification code will be sent to your inbox via Resend.
-                </p>
-                <input
-                  type="email"
-                  value={forgotEmail}
-                  onChange={(e) => setForgotEmail(e.target.value)}
-                  placeholder="e.g. employee@company.com"
-                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                  required
-                />
-                <div className="flex items-center justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowForgotPasswordModal(false)}
-                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSendingForgot}
-                    className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs disabled:opacity-60"
-                  >
-                    {isSendingForgot ? 'Sending Code...' : 'Send Verification Code'}
-                  </button>
-                </div>
+              <form onSubmit={sendResetCode} className="space-y-4">
+                <Field icon={<Mail className="w-4 h-4" />} label="Your account email">
+                  <input type="email" value={forgotEmail} onChange={(e) => setForgotEmail(e.target.value)} className={inputCls} required />
+                </Field>
+                <button type="submit" disabled={forgotBusy} className="w-full py-2.5 rounded-2xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60 cursor-pointer">
+                  {forgotBusy ? 'Sending…' : 'Send 6-digit code'}
+                </button>
               </form>
             )}
-
             {forgotStep === 'code' && (
-              <form onSubmit={handleResetPasswordConfirm} className="space-y-3">
-                <div className="p-2.5 bg-blue-50 border border-blue-100 rounded-2xl text-[11px] text-blue-900 font-semibold">
-                  A 6-digit code was sent to <strong>{forgotEmail}</strong>. Check your inbox and enter the code below along with your new password.
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 block mb-1">6-Digit Verification Code *</label>
-                  <input
-                    type="text"
-                    value={resetCode}
-                    onChange={(e) => setResetCode(e.target.value)}
-                    placeholder="e.g. 849201"
-                    maxLength={6}
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-mono font-extrabold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 tracking-widest text-center"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 block mb-1">New Password *</label>
-                  <div className="relative">
-                    <input
-                      type={showNewResetPassword ? 'text' : 'password'}
-                      value={newResetPassword}
-                      onChange={(e) => setNewResetPassword(e.target.value)}
-                      placeholder="Enter new password"
-                      className="w-full px-3.5 pr-10 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                      required
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowNewResetPassword(!showNewResetPassword)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 transition-colors"
-                      aria-label={showNewResetPassword ? 'Hide password' : 'Show password'}
-                    >
-                      {showNewResetPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setForgotStep('email')}
-                    className="text-xs font-bold text-slate-500 hover:text-slate-700"
-                  >
-                    &larr; Back
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={isSendingForgot}
-                    className="px-4 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-xs disabled:opacity-60"
-                  >
-                    {isSendingForgot ? 'Updating Password...' : 'Reset Password'}
-                  </button>
-                </div>
+              <form onSubmit={submitReset} className="space-y-4">
+                <p className="text-xs text-slate-500">If an account exists for <strong>{forgotEmail}</strong>, we emailed a 6-digit code. It expires in 15 minutes.</p>
+                <Field icon={<KeyRound className="w-4 h-4" />} label="6-digit code">
+                  <input inputMode="numeric" value={resetCode} onChange={(e) => setResetCode(e.target.value)} className={inputCls} maxLength={6} required />
+                </Field>
+                <Field icon={<Lock className="w-4 h-4" />} label="New password">
+                  <input type="password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} className={inputCls} autoComplete="new-password" minLength={8} required />
+                </Field>
+                <button type="submit" disabled={forgotBusy} className="w-full py-2.5 rounded-2xl bg-blue-600 text-white text-sm font-bold disabled:opacity-60 cursor-pointer">
+                  {forgotBusy ? 'Saving…' : 'Set new password'}
+                </button>
               </form>
             )}
-
             {forgotStep === 'done' && (
-              <div className="space-y-3 text-center py-2 animate-fade-in">
-                <div className="w-12 h-12 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 mx-auto flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6" />
-                </div>
-                <h4 className="text-sm font-extrabold text-slate-900">Password Reset Successful!</h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Your password for <strong className="text-slate-800">{forgotEmail}</strong> has been updated. You can now log in to the portal with your new password.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmail(forgotEmail);
-                    setPassword('');
-                    setShowForgotPasswordModal(false);
-                  }}
-                  className="w-full py-2.5 bg-slate-900 text-white font-bold text-xs rounded-xl"
-                >
-                  Return to Sign In
-                </button>
+              <div className="text-center space-y-2">
+                <CheckCircle2 className="w-10 h-10 text-emerald-500 mx-auto" />
+                <p className="text-sm font-bold text-slate-900">Password updated</p>
+                <p className="text-xs text-slate-500">You can sign in with your new password now.</p>
               </div>
             )}
-          </div>
-        </div>
-      )}
-
-      {/* Employee Registration Modal */}
-      {showRegisterModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 relative">
-            <button
-              onClick={() => setShowRegisterModal(false)}
-              className="absolute right-4 top-4 p-2 text-slate-400 hover:text-slate-600 rounded-full"
-            >
-              <X className="w-4 h-4" />
+            <button type="button" onClick={closeForgot} className="w-full text-xs font-bold text-slate-500 cursor-pointer">
+              Close
             </button>
-
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-2xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600 shrink-0">
-                <BadgeCheck className="w-5 h-5" />
-              </div>
-              <div>
-                <h3 className="text-sm font-extrabold text-slate-900">Employee Account Registration</h3>
-                <p className="text-[11px] text-slate-500">Submit your details for Admin verification and account creation</p>
-              </div>
-            </div>
-
-            {!regSuccess ? (
-              <form onSubmit={handleRegisterSubmit} className="space-y-3.5">
-                {regError && (
-                  <div className="p-3 bg-rose-50 border border-rose-200/90 rounded-2xl flex items-start gap-2 text-xs text-rose-800 font-semibold">
-                    <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                    <span>{regError}</span>
-                  </div>
-                )}
-
-                <div className="bg-amber-50/80 border border-amber-200/80 p-3 rounded-2xl text-[11px] text-amber-900 space-y-1">
-                  <span className="font-extrabold flex items-center gap-1 text-amber-900">
-                    <FileCheck2 className="w-3.5 h-3.5 text-amber-700" />
-                    Registration Process:
-                  </span>
-                  <p>
-                    Enter your official Name, Work Email, Department, and Job Designation. Admin or Super Admin will review your request and approve your account.
-                  </p>
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Full Name *</label>
-                  <input
-                    type="text"
-                    value={regName}
-                    onChange={(e) => setRegName(e.target.value)}
-                    placeholder="e.g. John Doe"
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Employee ID * (Format: DG-XXXX)</label>
-                  <input
-                    type="text"
-                    value={regEmployeeId}
-                    onChange={(e) => setRegEmployeeId(e.target.value)}
-                    placeholder="e.g. DG-2204"
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="text-xs font-bold text-slate-700 block mb-1">Work Email Address *</label>
-                  <input
-                    type="email"
-                    value={regEmail}
-                    onChange={(e) => setRegEmail(e.target.value)}
-                    placeholder="e.g. john@company.com"
-                    className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                    required
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1">Department *</label>
-                    <select
-                      value={regDepartment}
-                      onChange={(e) => setRegDepartment(e.target.value)}
-                      className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      required
-                    >
-                      <option value="Engineering">Engineering</option>
-                      <option value="Product">Product</option>
-                      <option value="Design">Design</option>
-                      <option value="Marketing">Marketing</option>
-                      <option value="Sales">Sales</option>
-                      <option value="HR/Administration">HR/Administration</option>
-                      <option value="Finance & Accounts">Finance & Accounts</option>
-                      <option value="Operations">Operations</option>
-                      <option value="Customer Support">Customer Support</option>
-                      <option value="Legal">Legal</option>
-                      <option value="IT">IT</option>
-                      <option value="Research & Development">Research & Development</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1">Designation *</label>
-                    <input
-                      type="text"
-                      value={regDesignation}
-                      onChange={(e) => setRegDesignation(e.target.value)}
-                      placeholder="e.g. Senior Software Engineer"
-                      className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1">Date of Birth *</label>
-                    <input
-                      type="date"
-                      value={regDob}
-                      onChange={(e) => setRegDob(e.target.value)}
-                      className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label className="text-xs font-bold text-slate-700 block mb-1">NID Number *</label>
-                    <input
-                      type="text"
-                      value={regNidNumber}
-                      onChange={(e) => setRegNidNumber(e.target.value)}
-                      placeholder="e.g. 1992039401283"
-                      className="w-full px-3.5 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 font-mono"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowRegisterModal(false)}
-                    className="px-4 py-2 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 text-xs font-extrabold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl shadow-xs"
-                  >
-                    Submit Request to Admin
-                  </button>
-                </div>
-              </form>
-            ) : (
-              <div className="space-y-3 text-center py-2 animate-fade-in">
-                <div className="w-12 h-12 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-600 mx-auto flex items-center justify-center">
-                  <CheckCircle2 className="w-6 h-6" />
-                </div>
-                <h4 className="text-sm font-extrabold text-slate-900">Request Dispatched to Admin!</h4>
-                <p className="text-xs text-slate-600 leading-relaxed">
-                  Your registration request for <strong className="text-slate-900">{regName}</strong> has been received.
-                </p>
-                <div className="bg-slate-50 border border-slate-200 p-3 rounded-2xl text-left text-xs space-y-1 font-mono text-slate-700">
-                  <p><strong>Name:</strong> {regName}</p>
-                  <p><strong>Employee ID:</strong> {regEmployeeId}</p>
-                  <p><strong>Work Email:</strong> {regEmail}</p>
-                  <p><strong>Department:</strong> {regDepartment}</p>
-                  <p><strong>Designation:</strong> {regDesignation}</p>
-                  <p><strong>Date of Birth:</strong> {regDob}</p>
-                  <p><strong>NID Number:</strong> {regNidNumber}</p>
-                  <p><strong>Status:</strong> PENDING ADMIN APPROVAL</p>
-                </div>
-                <p className="text-[11px] text-slate-500 italic">
-                  Once Admin/Super Admin accepts your request, your employee profile will be added and credentials sent to <strong>{regEmail}</strong>.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => setShowRegisterModal(false)}
-                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs"
-                >
-                  Return to Sign In
-                </button>
-              </div>
-            )}
           </div>
         </div>
       )}
     </div>
   );
 };
-

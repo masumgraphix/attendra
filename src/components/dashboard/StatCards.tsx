@@ -29,7 +29,7 @@ export const StatCards: React.FC<StatCardsProps> = ({
   avgEntry = '09:00 AM',
   avgExit = '06:00 PM',
   avgHours = 8.0,
-  totalEmployees = 8,
+  totalEmployees = 0,
   isEmployeeView = false,
 }) => {
   const adminCards = [
@@ -44,7 +44,7 @@ export const StatCards: React.FC<StatCardsProps> = ({
     {
       title: 'Late Today',
       value: lateCount.toString(),
-      subtext: 'Grace window (20m)',
+      subtext: 'Checked in after the late cutoff',
       icon: Clock,
       gradient: 'from-amber-500/10 via-amber-500/5 to-transparent',
       iconBg: 'bg-amber-500 text-white shadow-md shadow-amber-500/20',
@@ -69,9 +69,9 @@ export const StatCards: React.FC<StatCardsProps> = ({
 
   const employeeCards = [
     {
-      title: 'Monthly Attendance Rate',
-      value: presentCount > 0 ? '98.5%' : '100%',
-      subtext: 'Personal log summary',
+      title: 'Days Present',
+      value: presentCount.toString(),
+      subtext: 'This month',
       icon: UserCheck,
       gradient: 'from-blue-500/10 via-blue-500/5 to-transparent',
       iconBg: 'bg-blue-600 text-white shadow-md shadow-blue-500/20',

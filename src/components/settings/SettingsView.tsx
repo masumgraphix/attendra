@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Settings, Clock, MapPin, Save, Palmtree, Plus, Trash2, AlertTriangle, X, Check, Lock, ShieldCheck, Users, DollarSign, HelpCircle, RotateCcw, KeyRound } from 'lucide-react';
-import { LeavePolicy, Employee, UserAccount, UserRole, RegistrationRequest, OfficeShiftSettings } from '../../types';
+import { LeavePolicy, Employee, UserAccount, UserRole, RegistrationRequest, OfficeShiftSettings, Company } from '../../types';
 import { LatePenaltyRule } from '../../utils/salaryDeduction';
 import { UserAccountsView } from './UserAccountsView';
 import { ChangePasswordCard } from '../auth/ChangePasswordCard';
+import { CompanyProfileCard } from './CompanyProfileCard';
 
 interface SettingsViewProps {
   leavePolicies?: LeavePolicy[];
@@ -23,8 +24,9 @@ interface SettingsViewProps {
   onDeleteAccount?: (accountId: string) => void;
   onAcceptRegistration?: (req: RegistrationRequest, generatedPassword: string) => void;
   onRejectRegistration?: (reqId: string) => void;
-  onResetToDemoData?: () => void;
   onPasswordChanged?: (updatedUser: UserAccount) => void;
+  company?: Company | null;
+  onCompanyUpdated?: (company: Company) => void;
 }
 
 const COLOR_OPTIONS = [
@@ -64,11 +66,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onDeleteAccount,
   onAcceptRegistration,
   onRejectRegistration,
-  onResetToDemoData,
   onPasswordChanged,
+  company,
+  onCompanyUpdated,
 }) => {
   const [activeTab, setActiveTab] = useState<'system' | 'leave_policy' | 'user_accounts' | 'change_password'>('system');
-  const [showResetConfirmModal, setShowResetConfirmModal] = useState(false);
 
   const [officeStartTime, setOfficeStartTime] = useState(shiftSettings?.officeStartTime || '09:00');
   const [lateThresholdTime, setLateThresholdTime] = useState(shiftSettings?.lateThresholdTime || '09:20');
@@ -76,7 +78,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [weeklyOff, setWeeklyOff] = useState(shiftSettings?.weeklyOff || 'Friday');
   const [workDays, setWorkDays] = useState(shiftSettings?.workDays || 'Saturday to Thursday');
   const [enableGeofence, setEnableGeofence] = useState(shiftSettings?.enableGeofence ?? true);
-  const [ipWhitelist, setIpWhitelist] = useState(shiftSettings?.ipWhitelist || '192.168.1.0/24, 10.0.4.0/16');
+  const [ipWhitelist, setIpWhitelist] = useState(shiftSettings?.ipWhitelist || '');
 
   // Late Penalty Rule State
   const [penaltyThreshold, setPenaltyThreshold] = useState<number>(latePenaltyRule?.threshold ?? 3);
@@ -482,30 +484,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </div>
 
-          {/* System Reset & Demo Data Card (Super Admin Only) */}
-          {isSuperAdmin && (
-            <div className="p-6 rounded-3xl bg-rose-50/60 border border-rose-200 shadow-xs space-y-3 lg:col-span-2">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <h4 className="text-sm font-extrabold text-rose-950 flex items-center gap-2">
-                    <RotateCcw className="w-4 h-4 text-rose-600" />
-                    Reset to Demo Data
-                  </h4>
-                  <p className="text-xs text-rose-800/80">
-                    Erase all local modifications (employees, attendance logs, leave balances, policy edits, accounts) and restore Attendra to its original demo dataset.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowResetConfirmModal(true)}
-                  className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white font-extrabold text-xs rounded-2xl shadow-sm transition-all cursor-pointer shrink-0"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Reset to Demo Data
-                </button>
-              </div>
-            </div>
+          {company && (isSuperAdmin || currentUserRole === 'admin') && (
+            <CompanyProfileCard company={company} canEdit={isSuperAdmin} onUpdated={(c) => onCompanyUpdated?.(c)} />
           )}
         </div>
       )}
@@ -711,57 +691,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       )}
 
-      {/* Reset to Demo Data Confirmation Modal */}
-      {showResetConfirmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-md animate-fade-in">
-          <div className="bg-white border border-slate-200 rounded-3xl p-6 w-full max-w-md shadow-2xl space-y-4 relative">
-            <button
-              type="button"
-              onClick={() => setShowResetConfirmModal(false)}
-              className="absolute right-4 top-4 p-2 text-slate-400 hover:text-slate-600 rounded-full cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-3 text-rose-600">
-              <div className="w-10 h-10 rounded-2xl bg-rose-50 border border-rose-100 flex items-center justify-center shrink-0">
-                <AlertTriangle className="w-5 h-5 stroke-[2.2]" />
-              </div>
-              <div>
-                <h4 className="text-sm font-extrabold text-slate-900">Reset System to Demo Data?</h4>
-                <p className="text-xs text-slate-500">Irreversible Local Cleanup</p>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-700 leading-relaxed">
-              This action will <strong>permanently erase all local changes</strong> (newly created employees, attendance modifications, leave approvals, policy updates, and accounts) stored in this browser and revert to the default demo dataset.
-            </p>
-            <p className="text-xs text-rose-800 font-medium bg-rose-50 border border-rose-200/80 p-3 rounded-2xl">
-              You will be automatically logged out and redirected back to the login screen.
-            </p>
-
-            <div className="flex items-center justify-end gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowResetConfirmModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowResetConfirmModal(false);
-                  if (onResetToDemoData) onResetToDemoData();
-                }}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
-              >
-                Confirm & Reset Data
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };

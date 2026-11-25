@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { DEFAULT_AVATAR } from '../../utils/avatar';
 import { X, Building2, Palette, UserCheck, Plus } from 'lucide-react';
 import { Employee } from '../../types';
 
@@ -54,7 +55,7 @@ export const AddDepartmentModal: React.FC<AddDepartmentModalProps> = ({
       name: name.trim(),
       description: description.trim(),
       headName: headEmp ? headEmp.name : 'Unassigned',
-      headAvatar: headEmp ? headEmp.avatar : 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&q=80&w=200',
+      headAvatar: headEmp ? headEmp.avatar : DEFAULT_AVATAR,
       color: selectedColor,
     });
 
