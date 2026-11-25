@@ -78,6 +78,18 @@ export const CompanyDrawer: React.FC<Props> = ({ companyId, plans, onClose, onCh
     }
   };
 
+  const isOn = !!c && c.status !== 'suspended' && c.status !== 'cancelled';
+  const toggleOn = () => {
+    if (!c) return;
+    if (isOn) {
+      if (!window.confirm(`Make ${c.name} inactive?\n\nEveryone in this company will be signed out and cannot sign in until you turn it back on.`)) return;
+      act(() => api.platformUpdateCompany(c.id, { status: 'suspended' }), 'Company is now inactive');
+    } else {
+      const paidStillValid = !!c.paidUntil && new Date(c.paidUntil).getTime() > Date.now();
+      act(() => api.platformUpdateCompany(c.id, { status: paidStillValid ? 'active' : 'trial' }), 'Company is active again');
+    }
+  };
+
   const latestPaymentId = d?.payments.reduce<{ id: string; n: number } | null>((m, p) => (!m || p.receiptNo > m.n ? { id: p.id, n: p.receiptNo } : m), null)?.id;
   const wa = c ? whatsappLink(c.phone, `Assalamu alaikum, Attendra থেকে বলছি — ${c.name}-এর ব্যাপারে।`) : null;
 
@@ -98,45 +110,63 @@ export const CompanyDrawer: React.FC<Props> = ({ companyId, plans, onClose, onCh
 
         {c && state && (
           <div className={`p-5 space-y-5 ${busy ? 'opacity-60 pointer-events-none' : ''}`}>
-            <section className="rounded-[22px] bg-[#f7f8ff] p-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-slate-900">Account status</h3>
-                <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold ${state.cls}`}>{state.label}</span>
+            {/* 1. On / off: can this company use Attendra at all? */}
+            <section className={`rounded-[22px] p-4 flex items-center justify-between gap-4 ${isOn ? 'bg-emerald-50' : 'bg-slate-100'}`}>
+              <div>
+                <h3 className="text-sm font-semibold text-slate-900">{isOn ? 'Company is active' : 'Company is inactive'}</h3>
+                <p className="text-[11px] text-slate-600">{isOn ? 'Everyone in this company can sign in and use Attendra.' : 'Nobody in this company can sign in. Their data is kept safe.'}</p>
               </div>
-              <div className="grid grid-cols-3 gap-1 p-1 bg-white rounded-full" role="radiogroup" aria-label="Account status">
-                {([
-                  { key: 'active', label: 'Active (paid)' },
-                  { key: 'trial', label: 'Free trial' },
-                  { key: 'suspended', label: 'Suspended' },
-                ] as const).map((o) => {
-                  const current = c.status === 'cancelled' ? 'suspended' : c.status;
-                  const selected = current === o.key;
-                  return (
-                    <button
-                      key={o.key}
-                      role="radio"
-                      aria-checked={selected}
-                      onClick={() => changeStatus(o.key)}
-                      className={`py-2 rounded-full text-xs font-semibold transition cursor-pointer ${selected ? (o.key === 'active' ? 'bg-emerald-500 text-white' : o.key === 'trial' ? 'bg-amber-400 text-white' : 'bg-slate-700 text-white') : 'text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      {o.label}
-                    </button>
-                  );
-                })}
-              </div>
-              <p className="text-[11px] text-slate-500">
-                {c.status === 'active' && 'Paying customer. Switching to "Free trial" ends the paid subscription (use this if it was activated by mistake).'}
-                {c.status === 'trial' && 'On the free plan. To make it Active, record the payment you received.'}
-                {(c.status === 'suspended' || c.status === 'cancelled') && 'Nobody in this company can sign in. Their data is kept safe.'}
-              </p>
+              <button
+                role="switch"
+                aria-checked={isOn}
+                aria-label={isOn ? 'Make company inactive' : 'Make company active'}
+                onClick={() => toggleOn()}
+                className={`relative w-16 h-9 rounded-full transition shrink-0 cursor-pointer ${isOn ? 'bg-emerald-500' : 'bg-slate-400'}`}
+              >
+                <span className="sr-only">{isOn ? 'Active' : 'Inactive'}</span>
+                <span className={`absolute top-1 w-7 h-7 rounded-full bg-white shadow-md transition-all ${isOn ? 'left-8' : 'left-1'}`} />
+              </button>
             </section>
+
+            {/* 2. Billing: paid plan or free trial */}
+            {isOn && (
+              <section className="rounded-[22px] bg-[#f7f8ff] p-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-slate-900">Billing</h3>
+                  <span className={`px-2.5 py-1 rounded-full border text-xs font-semibold ${state.cls}`}>{state.label}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-1 p-1 bg-white rounded-full" role="radiogroup" aria-label="Billing">
+                  {([
+                    { key: 'active', label: 'Paid plan' },
+                    { key: 'trial', label: 'Free trial' },
+                  ] as const).map((o) => {
+                    const selected = c.status === o.key;
+                    return (
+                      <button
+                        key={o.key}
+                        role="radio"
+                        aria-checked={selected}
+                        onClick={() => changeStatus(o.key)}
+                        className={`py-2 rounded-full text-xs font-semibold transition cursor-pointer ${selected ? (o.key === 'active' ? 'bg-emerald-500 text-white' : 'bg-amber-400 text-white') : 'text-slate-500 hover:bg-slate-50'}`}
+                      >
+                        {o.label}
+                      </button>
+                    );
+                  })}
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {c.status === 'active' && `${c.planName} plan${c.paidUntil ? `, paid until ${fmtDate(c.paidUntil)}` : ''}. Switching to "Free trial" ends the paid plan (use this if it was activated by mistake).`}
+                  {c.status === 'trial' && `Free trial${c.trialEndsAt ? ` until ${fmtDate(c.trialEndsAt)}` : ''}. Press "Paid plan" to record a payment — or activate it without payment.`}
+                </p>
+              </section>
+            )}
 
             <div className="flex flex-wrap items-center gap-2">
               <span className="px-2.5 py-1 rounded-full border border-indigo-200 bg-indigo-50 text-indigo-700 text-xs font-bold">
                 {c.planName} · {c.employeeCount}/{c.maxEmployees} employees
               </span>
-              {c.paidUntil && <span className="text-xs text-slate-500">paid until {fmtDate(c.paidUntil)}</span>}
-              {c.status === 'trial' && <span className="text-xs text-slate-500">trial ends {fmtDate(c.trialEndsAt)}</span>}
+              {c.status === 'active' && c.paidUntil && <span className="text-xs text-slate-500">paid until {fmtDate(c.paidUntil)}</span>}
+              {c.status === 'trial' && c.trialEndsAt && <span className="text-xs text-slate-500">trial ends {fmtDate(c.trialEndsAt)}</span>}
             </div>
 
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -303,6 +333,13 @@ export const CompanyDrawer: React.FC<Props> = ({ companyId, plans, onClose, onCh
             company={c}
             plans={plans}
             onClose={() => setShowPay(false)}
+            onActivateFree={async (plan, months) => {
+              setShowPay(false);
+              await act(
+                () => api.platformUpdateCompany(c.id, { status: 'active', plan, extendPaidDays: months * 30 }),
+                `Activated without payment: ${plans[plan]?.name} for ${months} month${months > 1 ? 's' : ''}`
+              );
+            }}
             onError={(m) => onToast('error', 'Payment not saved', m)}
             onSaved={async (p) => {
               setShowPay(false);
