@@ -38,24 +38,24 @@ export const CompaniesTab: React.FC<{ data: PlatformOverview; onOpen: (id: strin
   const FILTERS: [Filter, string][] = [['all', 'All'], ['attention', 'Needs attention'], ['trial', 'On trial'], ['trial_ended', 'Trial ended'], ['active', 'Paying'], ['suspended', 'Suspended']];
 
   return (
-    <section className="bg-white rounded-3xl border border-slate-200 shadow-sm">
-      <div className="p-4 flex flex-col lg:flex-row lg:items-center gap-3 border-b border-slate-100">
+    <section className="bg-white rounded-[24px] shadow-[0_8px_30px_rgba(91,94,244,0.06)]">
+      <div className="p-4 flex flex-col lg:flex-row lg:items-center gap-3 border-b border-[#f0f1fa]">
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company, owner, email, phone…" className="w-full pl-9 pr-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:border-indigo-500" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search company, owner, email, phone…" className="w-full pl-9 pr-3 py-2 text-sm bg-[#f5f6ff] border border-transparent rounded-full focus:outline-none focus:border-[#5b5ef4] focus:bg-white" />
         </div>
-        <div className="flex gap-1 text-xs font-bold overflow-x-auto">
+        <div className="flex gap-1 text-xs font-semibold overflow-x-auto">
           {FILTERS.map(([f, label]) => (
-            <button key={f} onClick={() => setFilter(f)} className={`px-3 py-1.5 rounded-lg whitespace-nowrap cursor-pointer ${filter === f ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-600'}`}>{label}</button>
+            <button key={f} onClick={() => setFilter(f)} className={`px-3.5 py-1.5 rounded-full whitespace-nowrap cursor-pointer ${filter === f ? 'bg-[#5b5ef4] text-white' : 'bg-slate-100 text-slate-600'}`}>{label}</button>
           ))}
         </div>
-        <button onClick={exportCsv} disabled={!rows.length} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer">
+        <button onClick={exportCsv} disabled={!rows.length} className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-[#f0f1ff] text-[#5b5ef4] text-xs font-semibold disabled:opacity-40 cursor-pointer">
           <Download className="w-3.5 h-3.5" /> Excel / CSV
         </button>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50">
+          <thead className="text-[11px] uppercase tracking-wide text-slate-400 bg-[#f7f8ff]">
             <tr>
               <th className="text-left px-4 py-2.5">Company</th>
               <th className="text-left px-4 py-2.5">Owner</th>
@@ -66,20 +66,20 @@ export const CompaniesTab: React.FC<{ data: PlatformOverview; onOpen: (id: strin
               <th className="text-left px-4 py-2.5">Last active</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[#f0f1fa]">
             {rows.map((c) => {
               const st = companyState(c);
               return (
                 <tr key={c.id} onClick={() => onOpen(c.id)} className="hover:bg-indigo-50/40 cursor-pointer">
                   <td className="px-4 py-3">
-                    <p className="font-bold text-slate-900">{c.name}</p>
+                    <p className="font-semibold text-slate-900">{c.name}</p>
                     <p className="text-[11px] text-slate-500">code <span className="font-mono">{c.slug}</span> · since {fmtDate(c.createdAt)}</p>
                   </td>
                   <td className="px-4 py-3">
                     <p className="text-xs font-semibold text-slate-800">{c.owner?.name || '—'}</p>
                     <p className="text-[11px] text-slate-500">{c.owner?.email}{c.phone ? ` · ${c.phone}` : ''}</p>
                   </td>
-                  <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full border text-[11px] font-bold whitespace-nowrap ${st.cls}`}>{st.label}</span></td>
+                  <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full border text-[11px] font-semibold whitespace-nowrap ${st.cls}`}>{st.label}</span></td>
                   <td className="px-4 py-3 text-xs font-semibold text-slate-700 whitespace-nowrap">{c.planName}{c.priceBdt ? ` · ${taka(c.priceBdt)}` : ''}</td>
                   <td className="px-4 py-3 text-xs font-semibold text-slate-700 text-right">{c.employeeCount} / {c.maxEmployees}</td>
                   <td className="px-4 py-3 text-xs font-semibold text-slate-700 text-right">{taka(c.totalPaid || 0)}</td>
@@ -102,13 +102,8 @@ export const CompaniesTab: React.FC<{ data: PlatformOverview; onOpen: (id: strin
 // Payments ledger
 // ---------------------------------------------------------------------------
 
-export const PaymentsTab: React.FC<{ onReceipt: (id: string) => void; onOpenCompany: (id: string) => void; onToast: Toast; refreshKey: number }> = ({ onReceipt, onOpenCompany, onToast, refreshKey }) => {
-  const [payments, setPayments] = useState<Payment[] | null>(null);
+export const PaymentsTab: React.FC<{ payments: Payment[] | null; onReceipt: (id: string) => void; onOpenCompany: (id: string) => void }> = ({ payments, onReceipt, onOpenCompany }) => {
   const [month, setMonth] = useState('all');
-
-  useEffect(() => {
-    api.platformPayments().then(setPayments).catch((e) => onToast('error', 'Could not load payments', e.message));
-  }, [refreshKey]);
 
   const months = useMemo(() => Array.from(new Set((payments || []).map((p) => p.paidAt.slice(0, 7)))).sort().reverse(), [payments]);
   const rows = (payments || []).filter((p) => month === 'all' || p.paidAt.startsWith(month));
@@ -122,25 +117,25 @@ export const PaymentsTab: React.FC<{ onReceipt: (id: string) => void; onOpenComp
     })));
 
   return (
-    <section className="bg-white rounded-3xl border border-slate-200 shadow-sm">
-      <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100">
+    <section className="bg-white rounded-[24px] shadow-[0_8px_30px_rgba(91,94,244,0.06)]">
+      <div className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-[#f0f1fa]">
         <div>
-          <h3 className="text-sm font-extrabold text-slate-900">Payments</h3>
+          <h3 className="text-sm font-semibold text-slate-900">Payments</h3>
           <p className="text-xs text-slate-500">{rows.length} payment{rows.length === 1 ? '' : 's'} · total <strong className="text-slate-900">{taka(total)}</strong></p>
         </div>
         <div className="flex gap-2">
-          <select value={month} onChange={(e) => setMonth(e.target.value)} className="px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-xs font-bold text-slate-700">
+          <select value={month} onChange={(e) => setMonth(e.target.value)} className="px-3 py-2 rounded-full bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700">
             <option value="all">All months</option>
             {months.map((m) => <option key={m} value={m}>{new Date(`${m}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}</option>)}
           </select>
-          <button onClick={exportCsv} disabled={!rows.length} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 disabled:opacity-40 cursor-pointer">
+          <button onClick={exportCsv} disabled={!rows.length} className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-[#f0f1ff] text-[#5b5ef4] text-xs font-semibold disabled:opacity-40 cursor-pointer">
             <Download className="w-3.5 h-3.5" /> Excel / CSV
           </button>
         </div>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="text-[11px] uppercase tracking-wide text-slate-500 bg-slate-50">
+          <thead className="text-[11px] uppercase tracking-wide text-slate-400 bg-[#f7f8ff]">
             <tr>
               <th className="text-left px-4 py-2.5">Receipt</th>
               <th className="text-left px-4 py-2.5">Date</th>
@@ -151,17 +146,17 @@ export const PaymentsTab: React.FC<{ onReceipt: (id: string) => void; onOpenComp
               <th className="text-right px-4 py-2.5"></th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[#f0f1fa]">
             {rows.map((p) => (
               <tr key={p.id}>
                 <td className="px-4 py-2.5 font-mono text-xs">#{String(p.receiptNo).padStart(5, '0')}</td>
                 <td className="px-4 py-2.5 text-xs text-slate-600">{fmtDate(p.paidAt)}</td>
-                <td className="px-4 py-2.5"><button onClick={() => onOpenCompany(p.companyId)} className="text-xs font-bold text-indigo-700 hover:underline cursor-pointer">{p.companyName}</button></td>
-                <td className="px-4 py-2.5 text-right font-bold">{taka(p.amountBdt)}</td>
+                <td className="px-4 py-2.5"><button onClick={() => onOpenCompany(p.companyId)} className="text-xs font-semibold text-indigo-700 hover:underline cursor-pointer">{p.companyName}</button></td>
+                <td className="px-4 py-2.5 text-right font-semibold">{taka(p.amountBdt)}</td>
                 <td className="px-4 py-2.5 text-xs text-slate-600">{METHOD_LABEL[p.method] || p.method}{p.trxId ? <span className="font-mono"> · {p.trxId}</span> : ''}</td>
                 <td className="px-4 py-2.5 text-xs text-slate-600">{p.planName} × {p.months}m</td>
                 <td className="px-4 py-2.5 text-right">
-                  <button onClick={() => onReceipt(p.id)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] font-bold text-slate-700 cursor-pointer">
+                  <button onClick={() => onReceipt(p.id)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 text-[11px] font-semibold text-slate-700 cursor-pointer">
                     <Receipt className="w-3 h-3" /> Receipt
                   </button>
                 </td>
@@ -207,9 +202,9 @@ export const PlansTab: React.FC<{ data: PlatformOverview; onSaved: () => void; o
   const input = 'w-full px-2.5 py-1.5 text-sm bg-slate-50 border border-slate-200 rounded-lg';
 
   return (
-    <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4">
+    <section className="bg-white rounded-[24px] shadow-[0_8px_30px_rgba(91,94,244,0.06)] p-5 space-y-4">
       <div>
-        <h3 className="text-sm font-extrabold text-slate-900">Plans &amp; prices</h3>
+        <h3 className="text-sm font-semibold text-slate-900">Plans &amp; prices</h3>
         <p className="text-xs text-slate-500">Monthly price in taka and the maximum number of active employees for each plan.</p>
       </div>
       <div className="overflow-x-auto">
@@ -244,10 +239,10 @@ export const PlansTab: React.FC<{ data: PlatformOverview; onSaved: () => void; o
         </table>
       </div>
       <div className="flex justify-between">
-        <button onClick={() => setRows((r) => [...r, { key: '', name: '', maxEmployees: 50, priceBdt: 0 }])} className="flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 cursor-pointer">
+        <button onClick={() => setRows((r) => [...r, { key: '', name: '', maxEmployees: 50, priceBdt: 0 }])} className="flex items-center gap-1.5 px-3 py-2 rounded-full bg-[#f0f1ff] text-[#5b5ef4] text-xs font-semibold text-slate-700 cursor-pointer">
           <Plus className="w-3.5 h-3.5" /> Add plan
         </button>
-        <button onClick={save} disabled={busy} className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold disabled:opacity-60 cursor-pointer">
+        <button onClick={save} disabled={busy} className="flex items-center gap-1.5 px-4 py-2 rounded-full bg-[#5b5ef4] text-white text-xs font-semibold disabled:opacity-60 cursor-pointer">
           <Save className="w-3.5 h-3.5" /> {busy ? 'Saving…' : 'Save plans'}
         </button>
       </div>
@@ -290,22 +285,22 @@ export const BroadcastTab: React.FC<{ onToast: Toast }> = ({ onToast }) => {
   const preview = { info: 'bg-blue-50 border-blue-200 text-blue-900', warning: 'bg-amber-50 border-amber-200 text-amber-900', success: 'bg-emerald-50 border-emerald-200 text-emerald-900' }[level];
 
   return (
-    <section className="bg-white rounded-3xl border border-slate-200 shadow-sm p-5 space-y-4 max-w-2xl">
+    <section className="bg-white rounded-[24px] shadow-[0_8px_30px_rgba(91,94,244,0.06)] p-5 space-y-4 max-w-2xl">
       <div>
-        <h3 className="text-sm font-extrabold text-slate-900 flex items-center gap-2"><Megaphone className="w-4 h-4 text-fuchsia-600" /> Announcement to all companies</h3>
+        <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2"><Megaphone className="w-4 h-4 text-[#5b5ef4]" /> Announcement to all companies</h3>
         <p className="text-xs text-slate-500">Shown as a banner at the top of every company's app until you remove it.</p>
       </div>
-      {current?.active && <p className="text-xs font-bold text-emerald-700">● Live now (since {fmtDate(current.updatedAt)})</p>}
-      <textarea value={message} onChange={(e) => setMessage(e.target.value)} maxLength={300} rows={3} placeholder="e.g. আজ রাত ১২টা থেকে ১২:৩০ পর্যন্ত update চলবে।" className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-xl" />
-      <div className="flex gap-2 text-xs font-bold">
+      {current?.active && <p className="text-xs font-semibold text-emerald-700">● Live now (since {fmtDate(current.updatedAt)})</p>}
+      <textarea value={message} onChange={(e) => setMessage(e.target.value)} maxLength={300} rows={3} placeholder="e.g. আজ রাত ১২টা থেকে ১২:৩০ পর্যন্ত update চলবে।" className="w-full px-3 py-2 text-sm bg-slate-50 border border-slate-200 rounded-full" />
+      <div className="flex gap-2 text-xs font-semibold">
         {(['info', 'warning', 'success'] as const).map((l) => (
-          <button key={l} onClick={() => setLevel(l)} className={`px-3 py-1.5 rounded-lg capitalize cursor-pointer ${level === l ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{l === 'info' ? 'Info' : l === 'warning' ? 'Warning' : 'Good news'}</button>
+          <button key={l} onClick={() => setLevel(l)} className={`px-3.5 py-1.5 rounded-full capitalize cursor-pointer ${level === l ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600'}`}>{l === 'info' ? 'Info' : l === 'warning' ? 'Warning' : 'Good news'}</button>
         ))}
       </div>
-      {message.trim() && <div className={`px-4 py-2.5 rounded-xl border text-sm font-semibold ${preview}`}>{message}</div>}
+      {message.trim() && <div className={`px-4 py-2.5 rounded-full border text-sm font-semibold ${preview}`}>{message}</div>}
       <div className="flex gap-2">
-        <button onClick={() => save(true)} disabled={busy || !message.trim()} className="px-4 py-2 rounded-xl bg-fuchsia-600 text-white text-xs font-bold disabled:opacity-50 cursor-pointer">Publish to all companies</button>
-        {current?.active && <button onClick={() => save(false)} disabled={busy} className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold cursor-pointer">Remove announcement</button>}
+        <button onClick={() => save(true)} disabled={busy || !message.trim()} className="px-4 py-2 rounded-full bg-[#5b5ef4] text-white text-xs font-semibold disabled:opacity-50 cursor-pointer">Publish to all companies</button>
+        {current?.active && <button onClick={() => save(false)} disabled={busy} className="px-4 py-2 rounded-full border border-slate-200 text-slate-700 text-xs font-semibold cursor-pointer">Remove announcement</button>}
       </div>
     </section>
   );

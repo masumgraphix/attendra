@@ -9,9 +9,11 @@ interface Props {
   onClose: () => void;
   onSaved: (payment: Payment) => void;
   onError: (msg: string) => void;
+  /** Activate the plan without recording money (free / demo / complimentary). */
+  onActivateFree?: (plan: string, months: number) => void;
 }
 
-export const RecordPaymentModal: React.FC<Props> = ({ company, plans, onClose, onSaved, onError }) => {
+export const RecordPaymentModal: React.FC<Props> = ({ company, plans, onClose, onSaved, onError, onActivateFree }) => {
   const paidPlans = Object.entries(plans).filter(([k]) => k !== 'trial');
   const [plan, setPlan] = useState(company.plan !== 'trial' && plans[company.plan] ? company.plan : paidPlans[0]?.[0] || '');
   const [months, setMonths] = useState(1);
@@ -114,6 +116,18 @@ export const RecordPaymentModal: React.FC<Props> = ({ company, plans, onClose, o
         <button type="submit" disabled={busy || !plan} className="w-full py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-extrabold disabled:opacity-60 cursor-pointer">
           {busy ? 'Saving…' : `Save payment of ${taka(Number(shownAmount) || 0)}`}
         </button>
+        {onActivateFree && (
+          <button
+            type="button"
+            disabled={busy || !plan}
+            onClick={() => {
+              if (window.confirm(`Activate ${company.name} on the ${plans[plan]?.name} plan for ${months} month${months > 1 ? 's' : ''} without recording any payment?`)) onActivateFree(plan, months);
+            }}
+            className="w-full py-2.5 rounded-xl bg-slate-100 text-slate-700 text-sm font-semibold disabled:opacity-60 cursor-pointer"
+          >
+            Activate without payment (free)
+          </button>
+        )}
       </form>
     </div>
   );

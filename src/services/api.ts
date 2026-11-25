@@ -205,11 +205,15 @@ export const api = {
     request<{ data: Company; emailSent: boolean; temporaryPassword?: string }>('/api/platform/companies', { method: 'POST', body: body(data) }, true),
   platformUpdateCompany: (
     id: string,
-    data: { status?: string; plan?: string; maxEmployees?: number; extendTrialDays?: number; extendPaidDays?: number; notes?: string; phone?: string; name?: string }
+    data: { status?: string; plan?: string; maxEmployees?: number; extendTrialDays?: number; extendPaidDays?: number; notes?: string; phone?: string; name?: string; endSubscription?: boolean }
   ) => request<Company>(`/api/platform/companies/${id}`, { method: 'PUT', body: body(data) }),
   platformCompany: (id: string) => request<PlatformCompanyDetail>(`/api/platform/companies/${id}`),
   platformRecordPayment: (id: string, data: { plan: string; months: number; amountBdt: number; method: string; trxId?: string; note?: string; paidAt?: string }) =>
     request<{ payment: Payment; company: Company }>(`/api/platform/companies/${id}/payments`, { method: 'POST', body: body(data) }),
+  platformCancelPayment: (id: string, reason?: string) =>
+    request<{ company: Company }>(`/api/platform/payments/${id}`, { method: 'DELETE', body: body({ reason }) }),
+  platformSetUserStatus: (id: string, status: 'active' | 'inactive') =>
+    request<{ id: string; status: string }>(`/api/platform/users/${id}`, { method: 'PUT', body: body({ status }) }),
   platformPayments: () => request<Payment[]>('/api/platform/payments'),
   platformPayment: (id: string) => request<Payment & { companySlug: string; companyPhone: string | null; owner: { name: string; email: string } | null }>(`/api/platform/payments/${id}`),
   platformSavePlans: (plans: PlatformOverview['plans']) => request<PlatformOverview['plans']>('/api/platform/plans', { method: 'PUT', body: body({ plans }) }),

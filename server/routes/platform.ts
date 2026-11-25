@@ -177,6 +177,11 @@ platformRouter.put('/platform/companies/:id', async (req, res, next) => {
     }
     if (b.extendTrialDays) add(`trial_ends_at = GREATEST(COALESCE(trial_ends_at, NOW()), NOW()) + make_interval(days => ?)`, Number(b.extendTrialDays));
     if (b.extendPaidDays) add(`paid_until = GREATEST(COALESCE(paid_until, NOW()), NOW()) + make_interval(days => ?)`, Number(b.extendPaidDays));
+    if (b.endSubscription) {
+      // Undo a paid activation (e.g. activated by mistake): back to the free trial plan, no paid period.
+      sets.push(`status = 'trial'`, `plan = 'trial'`, `paid_until = NULL`);
+      add('max_employees = ?', P.trial.maxEmployees);
+    }
     if (b.name) add('name = ?', String(b.name).trim().slice(0, 120));
     if (b.phone !== undefined) add('phone = ?', String(b.phone).trim().slice(0, 40));
     if (b.notes !== undefined) add('owner_notes = ?', String(b.notes).slice(0, 5000));
@@ -187,6 +192,9 @@ platformRouter.put('/platform/companies/:id', async (req, res, next) => {
     if (b.status === 'suspended' || b.status === 'cancelled') {
       await query(`UPDATE users SET token_version = token_version + 1 WHERE company_id = $1`, [req.params.id]);
     }
+    const changes = [b.status && `status → ${b.status}`, b.endSubscription && 'subscription ended (back to trial)', b.plan && `plan → ${b.plan}`,
+      b.extendTrialDays && `trial +${b.extendTrialDays}d`, b.extendPaidDays && `paid +${b.extendPaidDays}d`].filter(Boolean);
+    if (changes.length) await audit(req.params.id, { actor: 'Attendra', actorRole: 'platform', action: 'Account changed by Attendra', newValue: changes.join(', ') });
     res.json({ success: true, data: publicCompany(r.rows[0]) });
   } catch (err) { next(err); }
 });
@@ -285,6 +293,70 @@ platformRouter.post('/platform/companies/:id/payments', async (req: Request, res
       newValue: `৳${amount} via ${method}${trxId ? ` (${trxId})` : ''} — ${P[plan].name} × ${months} month(s), paid until ${new Date(result.company.paid_until).toISOString().split('T')[0]}`,
     });
     res.json({ success: true, data: { payment: toPayment(result.payment), company: publicCompany(result.company) } });
+  } catch (err) { next(err); }
+});
+
+/**
+ * Cancel a payment recorded by mistake. Only a company's most recent payment can be
+ * cancelled, so the subscription can be rolled back exactly to what it was before.
+ */
+platformRouter.delete('/platform/payments/:id', async (req, res, next) => {
+  try {
+    const P = plans();
+    const result = await tx(async (client) => {
+      const p = await client.query(`SELECT * FROM payments WHERE id = $1 FOR UPDATE`, [req.params.id]);
+      const pay = p.rows[0];
+      if (!pay) return { error: 404 as const };
+      const latest = await client.query(`SELECT id FROM payments WHERE company_id = $1 ORDER BY created_at DESC LIMIT 1`, [pay.company_id]);
+      if (latest.rows[0]?.id !== pay.id) return { error: 409 as const };
+      await client.query(`DELETE FROM payments WHERE id = $1`, [pay.id]);
+      const prev = await client.query(`SELECT * FROM payments WHERE company_id = $1 ORDER BY created_at DESC LIMIT 1`, [pay.company_id]);
+      const before = prev.rows[0];
+      const upd = before
+        ? await client.query(
+            `UPDATE companies SET plan = $2, max_employees = $3, paid_until = $4, status = CASE WHEN status = 'suspended' THEN status ELSE 'active' END WHERE id = $1 RETURNING *`,
+            [pay.company_id, before.plan, P[before.plan]?.maxEmployees || P.trial.maxEmployees, before.period_to]
+          )
+        : await client.query(
+            `UPDATE companies SET plan = 'trial', max_employees = $2, paid_until = NULL,
+               status = CASE WHEN status = 'suspended' THEN status ELSE 'trial' END,
+               trial_ends_at = COALESCE(trial_ends_at, created_at + INTERVAL '14 days') WHERE id = $1 RETURNING *`,
+            [pay.company_id, P.trial.maxEmployees]
+          );
+      return { pay, company: upd.rows[0] };
+    });
+    if ('error' in result) {
+      return result.error === 404
+        ? res.status(404).json({ success: false, message: 'Payment not found.' })
+        : res.status(409).json({ success: false, message: 'Only the most recent payment of a company can be cancelled. Cancel the newer ones first.' });
+    }
+    await audit(result.company.id, {
+      actor: 'Attendra', actorRole: 'platform', action: 'Payment cancelled', status: 'warning',
+      oldValue: `৳${Number(result.pay.amount_bdt)} via ${result.pay.method}${result.pay.trx_id ? ` (${result.pay.trx_id})` : ''}`,
+      reason: String(req.body?.reason || '').slice(0, 200) || undefined,
+    });
+    res.json({ success: true, data: { company: publicCompany(result.company) } });
+  } catch (err) { next(err); }
+});
+
+/** Turn a single person's login on or off (inside any company). */
+platformRouter.put('/platform/users/:id', async (req, res, next) => {
+  try {
+    const status = req.body?.status === 'inactive' ? 'inactive' : req.body?.status === 'active' ? 'active' : null;
+    if (!status) return res.status(400).json({ success: false, message: 'Status must be active or inactive.' });
+    const u = await query(`SELECT * FROM users WHERE id = $1 AND role <> 'platform_admin'`, [req.params.id]);
+    const user = u.rows[0];
+    if (!user) return res.status(404).json({ success: false, message: 'Login not found.' });
+    if (status === 'inactive' && user.role === 'super_admin') {
+      const others = await query(
+        `SELECT COUNT(*)::int AS n FROM users WHERE company_id = $1 AND role = 'super_admin' AND status = 'active' AND id <> $2`,
+        [user.company_id, user.id]
+      );
+      if (!others.rows[0].n) return res.status(400).json({ success: false, message: 'This is the only active Super Admin of the company. Suspend the company instead.' });
+    }
+    await query(`UPDATE users SET status = $2, token_version = token_version + 1 WHERE id = $1`, [user.id, status]);
+    await audit(user.company_id, { actor: 'Attendra', actorRole: 'platform', action: status === 'inactive' ? 'Login deactivated by Attendra' : 'Login reactivated by Attendra', target: `${user.name} (${user.email})`, status: 'warning' });
+    res.json({ success: true, data: { id: user.id, status } });
   } catch (err) { next(err); }
 });
 
