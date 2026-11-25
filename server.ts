@@ -34,6 +34,7 @@ app.get('/api/health', async (_req, res) => {
     await query('SELECT 1');
     res.json({ success: true, status: 'ok', database: 'connected' });
   } catch (err: any) {
+    console.error('[health] database check failed:', err?.code || '', err?.message || err);
     res.status(503).json({ success: false, status: 'degraded', database: 'unavailable' });
   }
 });
