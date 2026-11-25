@@ -18,9 +18,12 @@ let pool: pg.Pool | null = null;
 
 export const getPool = (): pg.Pool => {
   if (!pool) {
-    const url = process.env.DATABASE_URL;
+    // Tolerate common copy-paste wrappers: DATABASE_URL='…', psql '…', quotes, spaces.
+    const raw = String(process.env.DATABASE_URL || '').trim();
+    const match = raw.match(/postgres(?:ql)?:\/\/[^\s'"]+/);
+    const url = match ? match[0] : '';
     if (!url) {
-      throw new Error('DATABASE_URL is not set. Attendra requires a PostgreSQL database.');
+      throw new Error('DATABASE_URL is missing or is not a postgresql:// connection string.');
     }
     const isLocal = /@(localhost|127\.0\.0\.1)|host=\/|sslmode=disable/.test(url);
     pool = new Pool({
