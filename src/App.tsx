@@ -872,14 +872,6 @@ export default function App() {
         }).catch((err) => console.log('Recovered account sync fallback:', err));
       }
 
-      if (result?.alreadyExisted) {
-        addToast(
-          'warning',
-          'Account Already Existed',
-          `An account for ${req.email} was already in the database from a previous attempt (its old id has now been re-linked). If you meant to fully remove it earlier, please double-check the User Accounts list.`
-        );
-      }
-
       if (emailSimulated) {
         addToast(
           'warning',

@@ -80,6 +80,56 @@ app.get("/api/health", async (req, res) => {
 /**
  * POST /api/auth/login
  */
+/**
+ * Super Admin recovery. If there is NO active Super Admin in the database and
+ * the env vars SUPER_ADMIN_EMAIL + SUPER_ADMIN_PASSWORD are set, that email is
+ * created (or promoted, if it already exists) as an active Super Admin with
+ * that password. Does nothing while at least one active Super Admin exists,
+ * so leaving the env vars set afterwards can't be used to take over.
+ */
+let superAdminRecoveryDone = false;
+const ensureSuperAdminExists = async () => {
+  if (superAdminRecoveryDone) return;
+  const email = String(process.env.SUPER_ADMIN_EMAIL || '').trim().toLowerCase();
+  const rawPass = String(process.env.SUPER_ADMIN_PASSWORD || '').trim();
+  if (!email || !rawPass) { superAdminRecoveryDone = true; return; }
+  const name = String(process.env.SUPER_ADMIN_NAME || 'Super Admin').trim();
+  const pool = getPgPool();
+  try {
+    if (pool) {
+      await initPgDatabase(pool);
+      const existing = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'super_admin' AND status = 'active'`);
+      if (existing.rows[0].n === 0) {
+        const hash = await bcrypt.hash(rawPass, 10);
+        const emp = await pool.query(`SELECT id FROM employees WHERE LOWER(email) = $1`, [email]);
+        await pool.query(`
+          INSERT INTO users (id, email, password_hash, name, role, employee_id, status, avatar)
+          VALUES ($1, $2, $3, $4, 'super_admin', $5, 'active', '')
+          ON CONFLICT (email) DO UPDATE SET role = 'super_admin', status = 'active', password_hash = EXCLUDED.password_hash
+        `, [`USR-SA-${Date.now()}`, email, hash, name, emp.rows[0]?.id || null]);
+        console.log(`[recovery] Super Admin restored for ${email}`);
+      }
+    } else {
+      const db = await getDb();
+      if (!db.data.userAccounts.some((a: any) => a.role === 'super_admin' && a.status === 'active')) {
+        const hash = await bcrypt.hash(rawPass, 10);
+        const idx = db.data.userAccounts.findIndex((a: any) => a.email && a.email.toLowerCase() === email);
+        if (idx !== -1) {
+          db.data.userAccounts[idx] = { ...db.data.userAccounts[idx], role: 'super_admin', status: 'active', passwordHash: hash };
+        } else {
+          const emp = db.data.employees.find((e: any) => e.email && e.email.toLowerCase() === email);
+          db.data.userAccounts.push({ id: `USR-SA-${Date.now()}`, email, name, role: 'super_admin', employeeId: emp?.id || null, status: 'active', avatar: '', passwordHash: hash });
+        }
+        await db.write();
+        console.log(`[recovery] Super Admin restored for ${email}`);
+      }
+    }
+    superAdminRecoveryDone = true;
+  } catch (err) {
+    console.error("Super Admin recovery error:", err);
+  }
+};
+
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body || {};
@@ -87,6 +137,8 @@ app.post("/api/auth/login", async (req, res) => {
     if (!email || !password) {
       return res.status(400).json({ success: false, message: "Email and password are required." });
     }
+
+    await ensureSuperAdminExists();
 
     const cleanEmail = String(email).trim().toLowerCase();
     const pool = getPgPool();
@@ -1995,16 +2047,64 @@ app.get("/api/user-accounts", authenticateToken, async (req, res) => {
   res.json({ success: true, data: safeAccounts });
 });
 
-app.post("/api/user-accounts", authenticateToken, async (req, res) => {
+app.post("/api/user-accounts", authenticateToken, async (req: any, res) => {
+  if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Only Admin or Super Admin can create user accounts.' });
+  }
   const { password, ...accData } = req.body;
-  const rawPassword = password || 'password123';
+  const rawPassword = String(password || 'password123').trim();
   const passwordHash = await bcrypt.hash(rawPassword, 10);
   const pool = getPgPool();
+  // Only a Super Admin may create another Super Admin.
+  const safeRole = accData.role === 'super_admin' && req.user?.role !== 'super_admin' ? 'employee' : (accData.role || 'employee');
 
-  // Await the email result (instead of fire-and-forget) so we can tell the
-  // caller whether it was genuinely delivered via Resend or only simulated
-  // because RESEND_API_KEY isn't configured. Without this, the UI always
-  // claimed "password sent to email" even when nothing actually went out.
+  // Save the account FIRST, then email the password. Previously the email was
+  // sent before saving, and when a users row already existed for this email
+  // (POST /api/employees silently creates one with 'password123'), the
+  // INSERT hit a duplicate-key error and the emailed password was never
+  // stored — so the employee got "Incorrect password" on first login.
+  let savedAccount: any = null;
+  let alreadyExisted = false;
+
+  if (pool) {
+    try {
+      await initPgDatabase(pool);
+      const result = await pool.query(`
+        INSERT INTO users (id, email, password_hash, name, role, employee_id, status, avatar)
+        VALUES ($1, LOWER($2), $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (email) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          name = EXCLUDED.name,
+          role = EXCLUDED.role,
+          employee_id = COALESCE(EXCLUDED.employee_id, users.employee_id),
+          status = EXCLUDED.status,
+          avatar = COALESCE(NULLIF(EXCLUDED.avatar, ''), users.avatar)
+        RETURNING id, email, name, role, employee_id as "employeeId", status, avatar, (xmax <> 0) AS "wasUpdate"
+      `, [accData.id || `USR-${Date.now()}`, accData.email, passwordHash, accData.name, safeRole, accData.employeeId || null, accData.status || 'active', accData.avatar || '']);
+      const { wasUpdate, ...row } = result.rows[0];
+      savedAccount = row;
+      alreadyExisted = !!wasUpdate;
+    } catch (err: any) {
+      console.error("PG UserAccounts POST error:", err);
+      return res.status(500).json({ success: false, message: "Could not save the user account. No email was sent." });
+    }
+  } else {
+    const db = await getDb();
+    const cleanEmail = String(accData.email || '').trim().toLowerCase();
+    const idx = db.data.userAccounts.findIndex((a: any) => a.email && a.email.toLowerCase() === cleanEmail);
+    if (idx !== -1) {
+      alreadyExisted = true;
+      const { password: _old, ...existing } = db.data.userAccounts[idx];
+      db.data.userAccounts[idx] = { ...existing, ...accData, role: safeRole, id: existing.id, passwordHash };
+    } else {
+      db.data.userAccounts.push({ ...accData, role: safeRole, passwordHash });
+    }
+    await db.write();
+    const acc = db.data.userAccounts[idx !== -1 ? idx : db.data.userAccounts.length - 1];
+    const { passwordHash: _p, password: _pw, ...safeAcc } = acc;
+    savedAccount = safeAcc;
+  }
+
   let emailResult: { success: boolean; simulated?: boolean; error?: any } = { success: false };
   if (accData.email) {
     try {
@@ -2015,56 +2115,49 @@ app.post("/api/user-accounts", authenticateToken, async (req, res) => {
     }
   }
 
-  if (pool) {
-    try {
-      await pool.query(`
-        INSERT INTO users (id, email, password_hash, name, role, employee_id, status, avatar)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [accData.id || `USR-${Date.now()}`, accData.email, passwordHash, accData.name, accData.role || 'employee', accData.employeeId || null, accData.status || 'active', accData.avatar || '']);
-      return res.json({ success: true, data: { ...accData, passwordHash: undefined }, emailSimulated: !!emailResult.simulated, emailSent: !!emailResult.success && !emailResult.simulated });
-    } catch (err: any) {
-      console.error("PG UserAccounts POST error:", err);
-      // A duplicate email means this account already exists in Postgres
-      // (e.g. the same approval was submitted twice, or a stale UI state
-      // re-submitted an already-approved request). Previously this fell
-      // through to the local JSON file, silently creating a second,
-      // inconsistent copy of the account that would vanish on the next
-      // Vercel cold start. Instead, treat it as an existing account and
-      // return success so the UI doesn't show a false failure.
-      if (err?.code === '23505') {
-        try {
-          const existing = await pool.query(
-            `SELECT id, email, name, role, employee_id as "employeeId", status, avatar FROM users WHERE email = $1`,
-            [accData.email]
-          );
-          if (existing.rows[0]) {
-            return res.json({
-              success: true,
-              data: existing.rows[0],
-              emailSimulated: !!emailResult.simulated,
-              emailSent: !!emailResult.success && !emailResult.simulated,
-              alreadyExisted: true,
-            });
-          }
-        } catch (lookupErr) {
-          console.error("PG UserAccounts duplicate-lookup error:", lookupErr);
-        }
-      }
-    }
-  }
-
-  const db = await getDb();
-  const newAccount = { ...accData, passwordHash };
-  db.data.userAccounts.push(newAccount);
-  await db.write();
-  const { passwordHash: _p, ...safeAcc } = newAccount;
-  res.json({ success: true, data: safeAcc, emailSimulated: !!emailResult.simulated, emailSent: !!emailResult.success && !emailResult.simulated });
+  res.json({
+    success: true,
+    data: savedAccount,
+    alreadyExisted,
+    emailSimulated: !!emailResult.simulated,
+    emailSent: !!emailResult.success && !emailResult.simulated,
+  });
 });
 
-app.put("/api/user-accounts/:id", authenticateToken, async (req, res) => {
+// Returns true if removing/demoting this account would leave the system with
+// no active Super Admin (which locks everyone out of Super Admin features).
+const isLastActiveSuperAdmin = async (id: string): Promise<boolean> => {
+  const pool = getPgPool();
+  if (pool) {
+    try {
+      const target = await pool.query(`SELECT role, status FROM users WHERE id = $1`, [id]);
+      if (!target.rows[0] || target.rows[0].role !== 'super_admin') return false;
+      const others = await pool.query(`SELECT COUNT(*)::int AS n FROM users WHERE role = 'super_admin' AND status = 'active' AND id <> $1`, [id]);
+      return others.rows[0].n === 0;
+    } catch (err) { console.error("Last super admin check error:", err); return false; }
+  }
+  const db = await getDb();
+  const target = db.data.userAccounts.find((a: any) => a.id === id);
+  if (!target || target.role !== 'super_admin') return false;
+  return !db.data.userAccounts.some((a: any) => a.id !== id && a.role === 'super_admin' && a.status === 'active');
+};
+const LAST_SUPER_ADMIN_MSG = "This is the only active Super Admin. Create or promote another Super Admin before removing, demoting or deactivating this account.";
+
+app.put("/api/user-accounts/:id", authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   const { password, passwordHash, ...updates } = req.body;
   const pool = getPgPool();
+
+  if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Only Admin or Super Admin can edit user accounts.' });
+  }
+  if (updates.role === 'super_admin' && req.user?.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Only a Super Admin can grant the Super Admin role.' });
+  }
+  const demoting = (updates.role && updates.role !== 'super_admin') || (updates.status && updates.status !== 'active');
+  if (demoting && await isLastActiveSuperAdmin(id)) {
+    return res.status(400).json({ success: false, message: LAST_SUPER_ADMIN_MSG });
+  }
 
   if (pool) {
     try {
@@ -2093,9 +2186,15 @@ app.put("/api/user-accounts/:id", authenticateToken, async (req, res) => {
   return res.status(404).json({ success: false, message: "Account not found." });
 });
 
-app.delete("/api/user-accounts/:id", authenticateToken, async (req, res) => {
+app.delete("/api/user-accounts/:id", authenticateToken, async (req: any, res) => {
   const { id } = req.params;
   const pool = getPgPool();
+  if (req.user?.role !== 'admin' && req.user?.role !== 'super_admin') {
+    return res.status(403).json({ success: false, message: 'Only Admin or Super Admin can delete user accounts.' });
+  }
+  if (await isLastActiveSuperAdmin(id)) {
+    return res.status(400).json({ success: false, message: LAST_SUPER_ADMIN_MSG });
+  }
   if (pool) {
     try {
       await pool.query(`DELETE FROM users WHERE id = $1`, [id]);
