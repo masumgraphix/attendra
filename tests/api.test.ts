@@ -178,6 +178,61 @@ try {
     assert.equal((await call('GET', '/employees', undefined, login.body.token)).status, 200);
   });
 
+  await step('recording a payment activates the plan and extends the subscription', async () => {
+    const bad = await call('POST', `/platform/companies/${B.company.id}/payments`, { plan: 'trial', months: 1, amountBdt: 0, method: 'cash' }, platformToken);
+    assert.equal(bad.status, 400);
+    const r = await call('POST', `/platform/companies/${B.company.id}/payments`, { plan: 'business', months: 3, amountBdt: 12000, method: 'bkash', trxId: `TRX${stamp}` }, platformToken);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.data.company.status, 'active');
+    assert.equal(r.body.data.company.plan, 'business');
+    const days = (new Date(r.body.data.company.paidUntil).getTime() - Date.now()) / 86400_000;
+    assert.ok(days > 85 && days < 95, `paid until ~3 months, got ${days}`);
+    const dup = await call('POST', `/platform/companies/${B.company.id}/payments`, { plan: 'business', months: 1, amountBdt: 4000, method: 'bkash', trxId: `trx${stamp}` }, platformToken);
+    assert.equal(dup.status, 409);
+    const renew = await call('POST', `/platform/companies/${B.company.id}/payments`, { plan: 'business', months: 1, amountBdt: 4000, method: 'cash' }, platformToken);
+    const days2 = (new Date(renew.body.data.company.paidUntil).getTime() - Date.now()) / 86400_000;
+    assert.ok(days2 > 115, 'renewal continues from the current end date');
+    const detail = await call('GET', `/platform/companies/${B.company.id}`, undefined, platformToken);
+    assert.equal(detail.body.data.payments.length, 2);
+    const receipt = await call('GET', `/platform/payments/${r.body.data.payment.id}`, undefined, platformToken);
+    assert.equal(receipt.body.data.amountBdt, 12000);
+    const ov = await call('GET', '/platform/overview', undefined, platformToken);
+    assert.equal(ov.body.data.monthly.length, 12);
+    assert.equal(ov.body.data.stats.collectedThisMonthBdt, 16000);
+  });
+
+  await step('plans can be edited but plans in use cannot be removed', async () => {
+    const ov = await call('GET', '/platform/overview', undefined, platformToken);
+    const plans = { ...ov.body.data.plans, business: { ...ov.body.data.plans.business, priceBdt: 4500 } };
+    const ok = await call('PUT', '/platform/plans', { plans }, platformToken);
+    assert.equal(ok.status, 200);
+    assert.equal(ok.body.data.business.priceBdt, 4500);
+    const { business, ...without } = plans;
+    const blocked = await call('PUT', '/platform/plans', { plans: without }, platformToken);
+    assert.equal(blocked.status, 400);
+  });
+
+  await step('broadcast banner reaches company users', async () => {
+    await call('PUT', '/platform/broadcast', { message: 'Maintenance tonight', level: 'warning', active: true }, platformToken);
+    const login = await call('POST', '/auth/login', { email: `bob-${stamp}@b.test`, password: 'BetaPass#1' });
+    assert.equal(login.body.broadcast?.message, 'Maintenance tonight');
+    await call('PUT', '/platform/broadcast', { message: '', active: false }, platformToken);
+  });
+
+  await step('support login works, is audited, and cannot change passwords', async () => {
+    const r = await call('POST', `/platform/companies/${B.company.id}/support-login`, {}, platformToken);
+    assert.equal(r.status, 200);
+    const t = r.body.data.token;
+    const me = await call('GET', '/auth/me', undefined, t);
+    assert.equal(me.body.supportMode, true);
+    assert.equal((await call('GET', '/employees', undefined, t)).status, 200);
+    assert.equal((await call('POST', '/auth/change-password', { currentPassword: 'x', newPassword: 'whatever-123' }, t)).status, 403);
+    const loginB = await call('POST', '/auth/login', { email: `bob-${stamp}@b.test`, password: 'BetaPass#1' });
+    const logs = await call('GET', '/audit-logs', undefined, loginB.body.token);
+    assert.ok(logs.body.data.some((l: any) => l.action === 'Support session started'));
+    assert.equal((await call('POST', `/platform/companies/${B.company.id}/support-login`, {}, A.token)).status, 403);
+  });
+
   await step('password reset codes are single-use and attempt-limited', async () => {
     const f = await call('POST', '/auth/forgot-password', { email: `eve-${stamp}@a.test` });
     assert.equal(f.status, 200);

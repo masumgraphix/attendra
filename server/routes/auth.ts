@@ -8,6 +8,7 @@ import {
 import { createCompany, EmailTakenError, publicCompany, TRIAL_DAYS } from '../company.js';
 import { sendPasswordResetEmail, sendWelcomeEmail } from '../email.js';
 import { audit } from '../records.js';
+import { refreshPlatformSettings, activeBroadcast } from '../platformSettings.js';
 
 export const authRouter = Router();
 
@@ -42,6 +43,7 @@ const ensurePlatformAdmin = async () => {
 authRouter.post('/auth/login', async (req, res, next) => {
   try {
     await ensurePlatformAdmin();
+    await refreshPlatformSettings();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
     if (!email || !password) return res.status(400).json({ success: false, message: 'Email and password are required.' });
@@ -88,6 +90,7 @@ authRouter.post('/auth/login', async (req, res, next) => {
       account: publicUser(row),
       company: publicCompany(row.company),
       companyAccess: row.company ? access : { ok: true },
+      broadcast: row.company ? activeBroadcast() : null,
     });
   } catch (err) {
     next(err);
@@ -102,6 +105,8 @@ authRouter.get('/auth/me', requireAuth, async (req, res, next) => {
       account: publicUser(r.rows[0]),
       company: publicCompany(req.company),
       companyAccess: req.company ? companyAccess(req.company) : { ok: true },
+      broadcast: req.company ? activeBroadcast() : null,
+      supportMode: !!req.impersonatedBy,
     });
   } catch (err) {
     next(err);
@@ -123,6 +128,7 @@ authRouter.post('/auth/signup', async (req, res, next) => {
     if (password.length < MIN_PASSWORD) return res.status(400).json({ success: false, message: `Password must be at least ${MIN_PASSWORD} characters.` });
 
     if (!(await rateLimit(`signup:${clientIp(req)}`, 5, 3600))) return tooMany(res);
+    await refreshPlatformSettings();
     getJwtSecret(); // fail before creating anything if the server is misconfigured
 
     const { company, userId } = await createCompany({ companyName, ownerName, ownerEmail: email, password, phone });
@@ -199,6 +205,7 @@ authRouter.post('/auth/reset-password', async (req, res, next) => {
 
 authRouter.post('/auth/change-password', requireAuth, async (req, res, next) => {
   try {
+    if (req.impersonatedBy) return res.status(403).json({ success: false, message: 'Passwords cannot be changed during a support session.' });
     const currentPassword = String(req.body?.currentPassword || '');
     const newPassword = String(req.body?.newPassword || '');
     if (!currentPassword || !newPassword) return res.status(400).json({ success: false, message: 'Current and new password are required.' });

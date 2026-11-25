@@ -198,6 +198,36 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       END $$;
     `,
   },
+  {
+    id: '003_owner_panel',
+    sql: `
+      ALTER TABLE companies ADD COLUMN IF NOT EXISTS owner_notes TEXT NOT NULL DEFAULT '';
+
+      CREATE TABLE IF NOT EXISTS payments (
+        id           TEXT PRIMARY KEY,
+        receipt_no   BIGSERIAL UNIQUE,
+        company_id   TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+        amount_bdt   NUMERIC(12,2) NOT NULL CHECK (amount_bdt >= 0),
+        method       TEXT NOT NULL,              -- bkash | nagad | rocket | bank | cash | other
+        trx_id       TEXT,
+        plan         TEXT NOT NULL,
+        months       INT NOT NULL CHECK (months BETWEEN 1 AND 36),
+        period_from  TIMESTAMPTZ NOT NULL,
+        period_to    TIMESTAMPTZ NOT NULL,
+        note         TEXT,
+        recorded_by  TEXT,
+        paid_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_payments_company ON payments(company_id, paid_at DESC);
+
+      CREATE TABLE IF NOT EXISTS platform_settings (
+        key        TEXT PRIMARY KEY,
+        value      JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `,
+  },
 ];
 
 let migratePromise: Promise<void> | null = null;

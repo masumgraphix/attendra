@@ -90,6 +90,8 @@ export interface SessionResponse {
   account: UserAccount;
   company: Company | null;
   companyAccess: CompanyAccess;
+  broadcast?: Broadcast | null;
+  supportMode?: boolean;
 }
 
 export interface CreatedAccountResponse {
@@ -201,8 +203,20 @@ export const api = {
   platformOverview: () => request<PlatformOverview>('/api/platform/overview'),
   platformCreateCompany: (data: { companyName: string; ownerName: string; ownerEmail: string; phone?: string; plan: string }) =>
     request<{ data: Company; emailSent: boolean; temporaryPassword?: string }>('/api/platform/companies', { method: 'POST', body: body(data) }, true),
-  platformUpdateCompany: (id: string, data: { status?: string; plan?: string; maxEmployees?: number; extendTrialDays?: number; extendPaidDays?: number }) =>
-    request<Company>(`/api/platform/companies/${id}`, { method: 'PUT', body: body(data) }),
+  platformUpdateCompany: (
+    id: string,
+    data: { status?: string; plan?: string; maxEmployees?: number; extendTrialDays?: number; extendPaidDays?: number; notes?: string; phone?: string; name?: string }
+  ) => request<Company>(`/api/platform/companies/${id}`, { method: 'PUT', body: body(data) }),
+  platformCompany: (id: string) => request<PlatformCompanyDetail>(`/api/platform/companies/${id}`),
+  platformRecordPayment: (id: string, data: { plan: string; months: number; amountBdt: number; method: string; trxId?: string; note?: string; paidAt?: string }) =>
+    request<{ payment: Payment; company: Company }>(`/api/platform/companies/${id}/payments`, { method: 'POST', body: body(data) }),
+  platformPayments: () => request<Payment[]>('/api/platform/payments'),
+  platformPayment: (id: string) => request<Payment & { companySlug: string; companyPhone: string | null; owner: { name: string; email: string } | null }>(`/api/platform/payments/${id}`),
+  platformSavePlans: (plans: PlatformOverview['plans']) => request<PlatformOverview['plans']>('/api/platform/plans', { method: 'PUT', body: body({ plans }) }),
+  platformGetBroadcast: () => request<Broadcast | null>('/api/platform/broadcast'),
+  platformSaveBroadcast: (data: { message: string; level: Broadcast['level']; active: boolean }) =>
+    request<Broadcast>('/api/platform/broadcast', { method: 'PUT', body: body(data) }),
+  platformSupportLogin: (id: string) => request<{ token: string }>(`/api/platform/companies/${id}/support-login`, { method: 'POST', body: body({}) }),
   platformResetOwner: (id: string, email?: string) =>
     request<{ data: { email: string }; emailSent: boolean; temporaryPassword?: string }>(`/api/platform/companies/${id}/reset-owner`, { method: 'POST', body: body({ email }) }, true),
 };
@@ -212,6 +226,42 @@ export interface PlatformCompany extends Company {
   userCount: number;
   lastActiveAt: string | null;
   owner: { name: string; email: string } | null;
+  totalPaid: number;
+  notes: string;
+  priceBdt: number;
+}
+
+export interface Payment {
+  id: string;
+  receiptNo: number;
+  companyId: string;
+  companyName: string;
+  amountBdt: number;
+  method: string;
+  trxId: string | null;
+  plan: string;
+  planName: string;
+  months: number;
+  periodFrom: string;
+  periodTo: string;
+  note: string | null;
+  recordedBy: string | null;
+  paidAt: string;
+}
+
+export interface PlatformCompanyDetail {
+  company: PlatformCompany;
+  users: { id: string; name: string; email: string; role: string; status: string; lastLoginAt: string | null; createdAt: string }[];
+  payments: Payment[];
+  usage: { attendance_30d: number; leave_30d: number; active_days_30d: number };
+}
+
+export interface Broadcast {
+  id: string;
+  message: string;
+  level: 'info' | 'warning' | 'success';
+  active: boolean;
+  updatedAt: string;
 }
 
 export interface PlatformOverview {
@@ -223,7 +273,9 @@ export interface PlatformOverview {
     suspended: number;
     totalEmployees: number;
     monthlyRevenueBdt: number;
+    collectedThisMonthBdt: number;
   };
   companies: PlatformCompany[];
+  monthly: { month: string; revenue: number; signups: number; conversions: number }[];
   plans: Record<string, { name: string; maxEmployees: number; priceBdt: number }>;
 }

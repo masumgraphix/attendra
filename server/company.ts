@@ -3,12 +3,15 @@ import type pg from 'pg';
 import { tx, query } from './db.js';
 import { newId, slugify } from './auth.js';
 
-export const PLANS: Record<string, { name: string; maxEmployees: number; priceBdt: number }> = {
-  trial: { name: 'Free Trial', maxEmployees: 25, priceBdt: 0 },
-  starter: { name: 'Starter', maxEmployees: 25, priceBdt: 1500 },
-  business: { name: 'Business', maxEmployees: 100, priceBdt: 4000 },
-  enterprise: { name: 'Enterprise', maxEmployees: 1000, priceBdt: 12000 },
-};
+import { plans } from './platformSettings.js';
+
+/** Live plan table (editable from the owner panel). */
+export const PLANS = new Proxy({} as Record<string, { name: string; maxEmployees: number; priceBdt: number }>, {
+  get: (_t, key: string) => plans()[key],
+  has: (_t, key: string) => key in plans(),
+  ownKeys: () => Reflect.ownKeys(plans()),
+  getOwnPropertyDescriptor: (_t, key) => ({ enumerable: true, configurable: true, value: plans()[key as string] }),
+});
 
 export const TRIAL_DAYS = 14;
 
@@ -67,6 +70,7 @@ export const publicCompany = (c: any) => {
     trialEndsAt: c.trial_ends_at,
     paidUntil: c.paid_until,
     phone: c.phone,
+    priceBdt: plan.priceBdt,
     settings: withDefaults(c.settings),
     createdAt: c.created_at,
   };

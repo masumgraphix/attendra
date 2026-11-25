@@ -27,7 +27,7 @@ import {
   saveToLocalStorage,
   clearAttendraLocalStorage,
 } from './utils/storage';
-import { api, getAuthToken, setAuthToken as storeAuthToken, SESSION_EXPIRED_EVENT, COMPANY_BLOCKED_EVENT, SessionResponse } from './services/api';
+import { api, getAuthToken, setAuthToken as storeAuthToken, SESSION_EXPIRED_EVENT, COMPANY_BLOCKED_EVENT, SessionResponse, Broadcast } from './services/api';
 import { newId, nextEmployeeCode } from './utils/id';
 import { initialsAvatar } from './utils/avatar';
 import { Company, CompanyAccess } from './types';
@@ -150,6 +150,11 @@ export default function App() {
   const [company, setCompany] = useState<Company | null>(null);
   const [companyAccess, setCompanyAccess] = useState<CompanyAccess>({ ok: true });
   const [isBooting, setIsBooting] = useState<boolean>(() => !!getAuthToken());
+  const [broadcast, setBroadcast] = useState<Broadcast | null>(null);
+  const [supportMode, setSupportMode] = useState(false);
+  const [dismissedBroadcastId, setDismissedBroadcastId] = useState<string | null>(() => {
+    try { return localStorage.getItem('attendra_dismissed_broadcast'); } catch { return null; }
+  });
 
   // Audit lines and notifications are created optimistically in many handlers;
   // anything new that did not come from the server is pushed to it here.
@@ -450,12 +455,11 @@ export default function App() {
     }
   };
 
-  const resetSession = () => {
-    storeAuthToken(null);
-    setAuthToken(null);
-    setCurrentUser(null);
+  const clearCompanyData = () => {
     setCompany(null);
     setCompanyAccess({ ok: true });
+    setBroadcast(null);
+    setSupportMode(false);
     sessionRoleRef.current = null;
     setEmployees([]); setAttendance([]); setLeaveRequests([]); setLeavePolicies([]);
     setDepartments([]); setAnnouncements([]); setHolidays([]); setAuditLogs([]);
@@ -463,6 +467,14 @@ export default function App() {
     setShiftSettings(DEFAULT_SHIFT); setLatePenaltyRule({ threshold: 3, deductionDays: 1 });
     syncedAuditIds.current.clear();
     syncedNotifIds.current.clear();
+  };
+
+  const resetSession = () => {
+    storeAuthToken(null);
+    setAuthToken(null);
+    setCurrentUser(null);
+    clearCompanyData();
+    try { sessionStorage.removeItem(PLATFORM_TOKEN_KEY); } catch { /* ignore */ }
     clearAttendraLocalStorage();
   };
 
@@ -475,13 +487,47 @@ export default function App() {
     setCurrentUser(session.account);
     setCompany(session.company);
     setCompanyAccess(session.companyAccess || { ok: true });
+    setBroadcast(session.broadcast || null);
+    setSupportMode(!!session.supportMode);
     if (session.company?.settings) {
       setShiftSettings({ ...DEFAULT_SHIFT, ...session.company.settings.shift });
       setLatePenaltyRule(session.company.settings.latePenaltyRule);
     }
-    if (session.account.role !== 'platform_admin' && session.companyAccess?.ok !== false && !session.account.mustChangePassword) {
+    if (session.account.role !== 'platform_admin' && session.companyAccess?.ok !== false && (!session.account.mustChangePassword || session.supportMode)) {
       await loadDatabaseData();
     }
+  };
+
+  // "Open as support": the owner temporarily views a company as its Super Admin.
+  // The owner's own token is parked in sessionStorage and restored on exit.
+  const PLATFORM_TOKEN_KEY = 'attendra_platform_token';
+  const startSupportSession = async (companyId: string, companyName: string) => {
+    try {
+      const { token } = await api.platformSupportLogin(companyId);
+      sessionStorage.setItem(PLATFORM_TOKEN_KEY, getAuthToken() || '');
+      storeAuthToken(token);
+      setAuthToken(token);
+      clearCompanyData();
+      const session = await api.getSession();
+      if (!session) throw new Error('Could not open the company.');
+      await applySession(session);
+      setActiveSection('dashboard');
+      addToast('info', 'Support mode', `You are viewing ${companyName} as its Super Admin. Everything you do is logged.`);
+    } catch (err) {
+      addToast('error', 'Could not open company', err instanceof Error ? err.message : 'Please try again.');
+    }
+  };
+
+  const exitSupportSession = async () => {
+    const platformToken = sessionStorage.getItem(PLATFORM_TOKEN_KEY);
+    sessionStorage.removeItem(PLATFORM_TOKEN_KEY);
+    clearCompanyData();
+    if (!platformToken) return resetSession();
+    storeAuthToken(platformToken);
+    setAuthToken(platformToken);
+    const session = await api.getSession();
+    if (session) await applySession(session);
+    else resetSession();
   };
 
   // Restore the session from the stored token on app start.
@@ -1673,6 +1719,10 @@ export default function App() {
   }
 
   const handleLogout = () => {
+    if (supportMode) {
+      exitSupportSession();
+      return;
+    }
     resetSession();
     addToast('info', 'Signed out', 'You have been signed out.');
   };
@@ -1701,14 +1751,14 @@ export default function App() {
   if (currentUser.role === 'platform_admin') {
     return (
       <>
-        <PlatformAdminView currentUser={currentUser} onLogout={handleLogout} onToast={addToast} />
+        <PlatformAdminView currentUser={currentUser} onLogout={handleLogout} onToast={addToast} onSupportLogin={startSupportSession} />
         <ToastContainer toasts={toasts} onDismiss={removeToast} />
       </>
     );
   }
 
   // Temporary password → must choose a new one before using the app
-  if (currentUser.mustChangePassword) {
+  if (currentUser.mustChangePassword && !supportMode) {
     return (
       <ForcePasswordChangeView
         currentUser={currentUser}
@@ -1806,6 +1856,33 @@ export default function App() {
       {/* Background Soft Pastel Gradient Blobs */}
       <div className="fixed top-0 left-0 w-[500px] h-[500px] bg-gradient-to-tr from-sky-200/40 via-blue-100/30 to-indigo-200/20 rounded-full blur-3xl -z-10 pointer-events-none" />
       <div className="fixed bottom-0 right-0 w-[600px] h-[600px] bg-gradient-to-br from-purple-200/30 via-indigo-100/20 to-blue-200/30 rounded-full blur-3xl -z-10 pointer-events-none" />
+
+      {supportMode && (
+        <div className="sticky top-0 z-40 bg-indigo-600 text-white text-xs sm:text-sm font-semibold px-4 py-2 flex items-center justify-center gap-3">
+          <span>🛟 Support mode — you are viewing <strong>{company?.name}</strong> as its Super Admin. Every action is logged.</span>
+          <button onClick={exitSupportSession} className="px-3 py-1 rounded-lg bg-white text-indigo-700 font-bold cursor-pointer">Back to owner panel</button>
+        </div>
+      )}
+      {broadcast && broadcast.active && broadcast.id !== dismissedBroadcastId && (
+        <div
+          role="status"
+          className={`px-4 py-2.5 text-sm font-semibold flex items-center justify-center gap-3 border-b ${
+            broadcast.level === 'warning' ? 'bg-amber-50 border-amber-200 text-amber-900' : broadcast.level === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-blue-50 border-blue-200 text-blue-900'
+          }`}
+        >
+          <span>📢 {broadcast.message}</span>
+          <button
+            onClick={() => {
+              setDismissedBroadcastId(broadcast.id);
+              try { localStorage.setItem('attendra_dismissed_broadcast', broadcast.id); } catch { /* ignore */ }
+            }}
+            className="px-2 py-0.5 rounded-md text-xs font-bold opacity-70 hover:opacity-100 cursor-pointer"
+            aria-label="Dismiss announcement"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Main Layout Container */}
       <div className="flex min-h-screen max-w-[1700px] mx-auto">

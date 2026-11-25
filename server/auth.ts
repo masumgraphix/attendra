@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import type { Request, Response, NextFunction } from 'express';
 import { query } from './db.js';
+import { refreshPlatformSettings } from './platformSettings.js';
 
 export type Role = 'platform_admin' | 'super_admin' | 'admin' | 'employee';
 
@@ -20,6 +21,8 @@ declare global {
     interface Request {
       user?: AuthUser;
       company?: CompanyRow;
+      /** Platform admin id when the owner is using "support login" for this company. */
+      impersonatedBy?: string;
     }
   }
 }
@@ -51,6 +54,10 @@ export const newId = (prefix: string) => `${prefix}_${crypto.randomBytes(9).toSt
 
 export const signToken = (u: { id: string; tokenVersion: number }) =>
   jwt.sign({ sub: u.id, v: u.tokenVersion }, getJwtSecret(), { expiresIn: '7d' });
+
+/** Short-lived token that lets the platform owner see a company exactly as its Super Admin does. */
+export const signSupportToken = (u: { id: string; tokenVersion: number }, platformAdminId: string) =>
+  jwt.sign({ sub: u.id, v: u.tokenVersion, imp: platformAdminId }, getJwtSecret(), { expiresIn: '1h' });
 
 export const publicUser = (row: any) => ({
   id: row.id,
@@ -97,6 +104,11 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
   }
 
   try {
+    await refreshPlatformSettings();
+    if (payload.imp) {
+      const p = await query(`SELECT 1 FROM users WHERE id = $1 AND role = 'platform_admin' AND status = 'active'`, [payload.imp]);
+      if (!p.rowCount) return res.status(401).json({ success: false, message: 'Support session is no longer valid.' });
+    }
     const r = await query(
       `SELECT u.*, row_to_json(c.*) AS company
        FROM users u LEFT JOIN companies c ON c.id = u.company_id
@@ -107,10 +119,12 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     if (!row || row.status !== 'active' || row.token_version !== payload.v) {
       return res.status(401).json({ success: false, message: 'Your session is no longer valid. Please sign in again.' });
     }
+    req.impersonatedBy = payload.imp || undefined;
     req.user = {
       id: row.id,
       email: row.email,
-      name: row.name,
+      // Every audit line written during a support session says so.
+      name: payload.imp ? `${row.name} (via Attendra support)` : row.name,
       role: row.role,
       companyId: row.company_id,
       employeeId: row.employee_id,
