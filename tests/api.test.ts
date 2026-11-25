@@ -201,7 +201,37 @@ try {
     assert.equal(ov.body.data.stats.collectedThisMonthBdt, 16000);
   });
 
+  await step('a mistaken payment or activation can be undone', async () => {
+    const detail = await call('GET', `/platform/companies/${B.company.id}`, undefined, platformToken);
+    const [latest, older] = detail.body.data.payments;
+    assert.equal((await call('DELETE', `/platform/payments/${older.id}`, {}, platformToken)).status, 409, 'only the latest can be cancelled');
+    const undo = await call('DELETE', `/platform/payments/${latest.id}`, {}, platformToken);
+    assert.equal(undo.status, 200);
+    assert.equal(new Date(undo.body.data.company.paidUntil).getTime(), new Date(older.periodTo).getTime(), 'rolled back to the previous end date');
+    const undo2 = await call('DELETE', `/platform/payments/${older.id}`, {}, platformToken);
+    assert.equal(undo2.body.data.company.status, 'trial');
+    assert.equal(undo2.body.data.company.plan, 'trial');
+    assert.equal(undo2.body.data.company.paidUntil, null);
+    // Activated by hand by mistake → end subscription
+    await call('PUT', `/platform/companies/${B.company.id}`, { status: 'active', plan: 'business', extendPaidDays: 30 }, platformToken);
+    const end = await call('PUT', `/platform/companies/${B.company.id}`, { endSubscription: true }, platformToken);
+    assert.equal(end.body.data.status, 'trial');
+    assert.equal(end.body.data.paidUntil, null);
+  });
+
+  await step('owner can switch a person\'s login off and on', async () => {
+    const detail = await call('GET', `/platform/companies/${A.company.id}`, undefined, platformToken);
+    const eve = detail.body.data.users.find((u: any) => u.email === `eve-${stamp}@a.test`);
+    assert.equal((await call('PUT', `/platform/users/${eve.id}`, { status: 'inactive' }, platformToken)).status, 200);
+    assert.equal((await call('POST', '/auth/login', { email: `eve-${stamp}@a.test`, password: 'Eve-New-Pass-1' })).status, 403);
+    await call('PUT', `/platform/users/${eve.id}`, { status: 'active' }, platformToken);
+    assert.equal((await call('POST', '/auth/login', { email: `eve-${stamp}@a.test`, password: 'Eve-New-Pass-1' })).status, 200);
+    const owner = detail.body.data.users.find((u: any) => u.role === 'super_admin');
+    assert.equal((await call('PUT', `/platform/users/${owner.id}`, { status: 'inactive' }, platformToken)).status, 400);
+  });
+
   await step('plans can be edited but plans in use cannot be removed', async () => {
+    await call('PUT', `/platform/companies/${B.company.id}`, { plan: 'business' }, platformToken);
     const ov = await call('GET', '/platform/overview', undefined, platformToken);
     const plans = { ...ov.body.data.plans, business: { ...ov.body.data.plans.business, priceBdt: 4500 } };
     const ok = await call('PUT', '/platform/plans', { plans }, platformToken);
